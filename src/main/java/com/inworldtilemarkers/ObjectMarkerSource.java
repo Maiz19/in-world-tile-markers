@@ -98,22 +98,25 @@ final class ObjectMarkerSource
     void clearPoints() { points.clear(); }
 
     /** A region's saved points, read once. */
-    List<ObjectPoint> points(int region)
+    List<ObjectPoint> points(int region) { return points.computeIfAbsent(region, this::saved); }
+
+    /** A region's saved points, read now: what a change starts from. */
+    List<ObjectPoint> saved(int region) { return parse(gson, configs.getConfiguration(InWorldTileMarkersConfig.GROUP, KEY + region)); }
+
+    /** Marked objects in Object Markers' format (or this plugin's, its id, name and place); those without a name are left out. */
+    static List<ObjectPoint> parse(Gson gson, String json)
     {
-        return points.computeIfAbsent(region, r -> {
-            String json = configs.getConfiguration(InWorldTileMarkersConfig.GROUP, KEY + r);
-            List<ObjectPoint> list = new ArrayList<>();
-            if (Strings.isNullOrEmpty(json)) { return list; }
-            try
+        List<ObjectPoint> list = new ArrayList<>();
+        if (Strings.isNullOrEmpty(json)) { return list; }
+        try
+        {
+            for (ObjectPoint p : gson.fromJson(json, ObjectPoint[].class))
             {
-                for (ObjectPoint p : gson.fromJson(json, ObjectPoint[].class))
-                {
-                    if (p != null && p.name != null && !p.name.equals("null")) { list.add(p); }
-                }
+                if (p != null && p.name != null && !p.name.equals("null")) { list.add(p); }
             }
-            catch (RuntimeException ex) { list.clear(); }
-            return list;
-        });
+        }
+        catch (RuntimeException ex) { list.clear(); }
+        return list;
     }
 
     /** Loads the points of every loaded region; objects are matched as the scene is visited. */

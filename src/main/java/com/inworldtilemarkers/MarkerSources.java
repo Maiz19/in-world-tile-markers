@@ -61,6 +61,7 @@ final class MarkerSources
     private final Gson gson;
     private final InWorldTileMarkersConfig config;
     private final ObjectMarkerSource objectMarkers;
+    private final TilePackSource tilePacks;
     private final Set<NPC> npcs = Collections.newSetFromMap(new IdentityHashMap<>());
     /** The marked tiles in the scene; drawn in the tile options of the moment (collect). */
     private final List<Ground> ground = new ArrayList<>();
@@ -76,9 +77,11 @@ final class MarkerSources
     private WorldView predictedWorld;
 
     @Inject
-    MarkerSources(Client client, ConfigManager configs, Gson gson, InWorldTileMarkersConfig config, ObjectMarkerSource objectMarkers)
+    MarkerSources(Client client, ConfigManager configs, Gson gson, InWorldTileMarkersConfig config, ObjectMarkerSource objectMarkers,
+        TilePackSource tilePacks)
     {
         this.client = client; this.configs = configs; this.gson = gson; this.config = config; this.objectMarkers = objectMarkers;
+        this.tilePacks = tilePacks;
     }
 
     void rebuild()
@@ -195,7 +198,13 @@ final class MarkerSources
 
     private void loadGround(WorldView wv, int region)
     {
-        for (TilePoint p : tiles(region))
+        loadGround(wv, region, "ground:", tiles(region));
+        if (config.tilePacks()) { loadGround(wv, region, "pack:", tilePacks.tiles(region)); }
+    }
+
+    private void loadGround(WorldView wv, int region, String prefix, List<TilePoint> points)
+    {
+        for (TilePoint p : points)
         {
             WorldPoint world = WorldPoint.fromRegion(region, p.regionX, p.regionY, p.z);
             for (WorldPoint instance : WorldPoint.toLocalInstance(wv, world))
@@ -204,7 +213,7 @@ final class MarkerSources
                 // and changing floors within a scene does not necessarily trigger a rebuild.
                 LocalPoint local = LocalPoint.fromWorld(wv, instance.getX(), instance.getY());
                 if (local == null) { continue; }
-                ground.add(new Ground("ground:" + wv.getId() + ":" + instance, local, instance.getPlane(), p));
+                ground.add(new Ground(prefix + wv.getId() + ":" + instance, local, instance.getPlane(), p));
             }
         }
     }

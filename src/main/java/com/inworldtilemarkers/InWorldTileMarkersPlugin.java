@@ -37,6 +37,7 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Inject private InWorldTileMarkersConfig config;
     @Inject private MarkerSources sources;
     @Inject private ObjectMarkerSource objectMarkers;
+    @Inject private TilePackSource tilePacks;
     @Inject private SceneShapeRenderer renderer;
     @Inject private PathTracker paths;
     @Inject private ExternalMarks externalMarks;
@@ -46,6 +47,11 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Inject private PluginManager plugins;
     @Inject private ConfigManager configManager;
     private volatile boolean running, dirty;
+    /**
+     * Marked tiles or objects, the tagged names or Tile Packs' packs changed: read again once per tick, however many
+     * settings changed (a copy writes one per region).
+     */
+    private volatile boolean marksChanged, npcsChanged;
     /**
      * After a failure the marks are 2D for a moment, then tried again: 2 seconds, twice as long after each failure in a
      * row, at most a minute.
@@ -68,6 +74,7 @@ public class InWorldTileMarkersPlugin extends Plugin
         running = true; dirty = true; failedUntil = 0; sceneUnavailable = false;
         // Config changes while stopped were not delivered to this instance.
         objectMarkers.clearPoints();
+        tilePacks.clear();
         // The shadow transparency notice shows again after turning the plugin on (or installing it).
         warnedShadowTransparency = false;
         overlays.add(overlay);
@@ -116,8 +123,21 @@ public class InWorldTileMarkersPlugin extends Plugin
         if (!running || client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null) { return; }
         try
         {
+            if (marksChanged)
+            {
+                marksChanged = false;
+                objectMarkers.clearPoints();
+                tilePacks.clear();
+                if (!dirty) { sources.reloadMarks(); checkTilePacks(); }
+            }
+            if (npcsChanged)
+            {
+                npcsChanged = false;
+                // Only the NPCs are matched again: a full rebuild per tag made the renderer start over.
+                if (!dirty) { sources.refreshNpcs(); }
+            }
             // Not while the marks rest after a failure: the scene is read again when they are tried again.
-            if (dirty && !failed()) { rebuild(); }
+            if (dirty && !failed()) { rebuild(); checkTilePacks(); }
             List<Marker> tiles = sources.collect(pathTiles());
             List<ModelTarget> models = sources.modelTargets();
             // Marks other plugins sent through PluginMessage.
@@ -345,6 +365,7 @@ public class InWorldTileMarkersPlugin extends Plugin
             if (running)
             {
                 objectMarkers.clearPoints();
+                tilePacks.clear();
                 reset(); dirty = true; failedUntil = 0;
             }
         });
@@ -400,24 +421,33 @@ public class InWorldTileMarkersPlugin extends Plugin
 
     @Subscribe public void onConfigChanged(ConfigChanged e)
     {
-        if ("hd".equals(e.getGroup()) && "enableShadowTransparency".equals(e.getKey())) { warnedShadowTransparency = false; return; }
-        if (!InWorldTileMarkersConfig.GROUP.equals(e.getGroup())) { return; }
+        String group = e.getGroup(), key = e.getKey();
+        if ("hd".equals(group) && "enableShadowTransparency".equals(key)) { warnedShadowTransparency = false; return; }
+        // Tile Packs' packs turned on or off, or a custom pack changed (its settings are only read).
+        if (TilePackSource.GROUP.equals(group))
+        {
+            if (key.equals("packs") || key.startsWith("pack_")) { marksChanged = true; }
+            return;
+        }
+        if (!InWorldTileMarkersConfig.GROUP.equals(group)) { return; }
         // The settings are read every tick or frame: no rebuild (dragging a colour picker sent one per step), only
         // another try after a failure.
         failedUntil = 0;
-        String key = e.getKey();
-        // Marked tiles and objects: read again, on the client thread (settings change on the settings panel's).
-        if (key.startsWith(MarkerSources.TILES) || key.startsWith(ObjectMarkerSource.KEY))
+        if (key.startsWith(MarkerSources.TILES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
+        else if (key.equals("npcNames")) { npcsChanged = true; }
+    }
+
+    private static final String TILE_PACKS = "com.tilepacks.TilePacksPlugin";
+    private boolean tilePacksChecked;
+
+    /** Tile Packs draws the packs too while it runs: the player is told once to turn it off. */
+    private void checkTilePacks()
+    {
+        if (!tilePacksChecked && config.tilePacks() && tilePacks.any() && active(TILE_PACKS))
         {
-            clientThread.invokeLater(() -> {
-                objectMarkers.clearPoints();
-                if (running && !dirty) { sources.reloadMarks(); }
-            });
-        }
-        // Tagged names: only the NPCs are matched again.
-        else if (key.equals("npcNames"))
-        {
-            clientThread.invokeLater(() -> { if (running && !dirty) { sources.refreshNpcs(); } });
+            tilePacksChecked = true;
+            marking.noticeOnce("noticedTilePacks", "In-World Tile Markers draws your Tile Packs packs. Turn the Tile Packs plugin off"
+                + " (your packs stay chosen), or they are drawn twice.");
         }
     }
     @Subscribe public void onGameTick(GameTick e) { if (ticksSinceLogin < Integer.MAX_VALUE) { ticksSinceLogin++; } }

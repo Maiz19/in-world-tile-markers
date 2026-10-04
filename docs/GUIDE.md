@@ -14,16 +14,21 @@ Hold Shift and right-click:
 
 Colour, fill, border width and highlight style (hull, outline, clickbox, tile) are set per kind in the settings. Tiles imported from Ground Markers keep their own colour.
 
-These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show; turn them off once your marks are moved over.
+These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show.
 
-### Moving your Ground Markers over
+### Your marks from Ground Markers, Object Markers and NPC Indicators
 
-1. Right-click the world map orb and choose **Export Ground Markers**. Ground Markers copies the tiles of the area you are in.
-2. Right-click the world map orb and choose **Import In-World Tile Markers**.
+The first time In-World Tile Markers starts in a RuneLite profile, it copies your tiles from Ground Markers, your objects from Object Markers and your names from NPC Indicators. Their settings are only read, never changed. Turn those plugins off afterwards, or the marks are drawn twice.
 
-**Export In-World Tile Markers** copies your tiles in the same format, for Ground Markers or to share. **Import/export options** turns both off.
+**Sync** on the world map orb's right-click menu copies what you marked in them since. It only adds: a mark you removed here comes back if the other plugin still has it.
 
-Object Markers and NPC Indicators have no export: mark those again, or type the names into **NPC names**.
+### Sharing tiles
+
+**Export In-World Tile Markers** on the world map orb copies the tiles of the area you are in to the clipboard, in Ground Markers' format. **Import In-World Tile Markers** adds tiles from the clipboard, from this export or Ground Markers' own. **Import, export and sync** turns these options off.
+
+### Tile Packs
+
+The packs you turned on in the Tile Packs plugin are drawn too (option **Tile Packs**). Turn the Tile Packs plugin off once your packs are chosen: they stay chosen and its own drawing stops. Turn it on again to change them. Your own custom packs always show; packs added to Tile Packs later need an update of In-World Tile Markers.
 
 ## What it draws
 

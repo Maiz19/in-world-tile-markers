@@ -9,7 +9,7 @@ These files adapt parts of RuneLite; each names its origin in its header:
 
 - `FloatClickbox.java`: the clickbox of `Perspective.getClickbox`, `RectangleUnion.union` and `SimplePolygon.intersectWithConvex`, computed in floats.
 - `ModelShapes.java` and `Terrain.java`: the projection of `Perspective.localToCanvasGpu` / `modelToCanvas`, and the height interpolation of `Perspective.getTileHeight`.
-- `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators, and Ground Markers' import and export (its saved tile format).
+- `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators, and Ground Markers' import and export (its saved tile format). Copying the marks those plugins saved only reads their settings.
 - `MarkerSources.java`: Ground Markers' point loading and NPC Indicators' name matching, for In-World Tile Markers' own saved marks.
 - `ObjectMarkerSource.java`: Object Markers' matching and display rules, for In-World Tile Markers' own saved marks.
 - `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators, and option names of Ground Markers, Object Markers and NPC Indicators.
@@ -23,6 +23,14 @@ These files adapt parts of RuneLite; each names its origin in its header:
 `src/main/resources/com/inworldtilemarkers/loc_blocking.txt` (per object, the sides it cannot be used from) and `npc_blocking.txt` (NPCs that block walking) are Path Marker's lists of that commit, unchanged; the client's API offers neither. The path options in `InWorldTileMarkersConfig.java` keep the option names and descriptions of its `PathMarkerConfig`.
 
 The path code, `PathTracker.java` and `RouteFinder.java`, is In-World Tile Markers' own, written with Path Marker as the reference for its features and for the game's rules it follows (the client's route search, reach rules per object shape, and how the game steps along a route).
+
+## Tile Packs
+
+- Author: TrevorMDev
+- Source: https://github.com/TrevorMDev/tile-packs (commit `8091ee842642c34fb88bb79c61e104500e91bd96`)
+- License: BSD 2-Clause, copyright (c) 2022-2024 Trevor (TrevorMDev). Full text in `src/main/resources/META-INF/LICENSE-tile-packs`, included in the JAR.
+
+`src/main/resources/com/inworldtilemarkers/tilePacks.jsonc` is the pack list of that commit, unchanged. `TilePackSource.java` adapts its pack loading (`TilePackManager`, `PointManager`): Tile Packs' settings are only read (the packs turned on, custom packs), and the tiles are drawn by In-World Tile Markers. Packs added to Tile Packs after that commit are missing until the file is updated; custom packs are always current.
 
 ## Corner Tile Indicators
 

@@ -95,7 +95,10 @@ public interface InWorldTileMarkersConfig extends Config
     @ConfigItem(keyName = "tileBorderWidth", name = "Border width", description = "Width of the tiles' border", position = 3, section = groundSection)
     default double tileBorderWidth() { return 2; }
 
-    @ConfigItem(keyName = "showImportExport", name = "Import/export options", description = "Import and Export on the world map orb's right-click menu, in Ground Markers' format: its export can be imported here", position = 4, section = groundSection)
+    @ConfigItem(keyName = "tilePacks", name = "Tile Packs", description = "Also draw the packs turned on in the Tile Packs plugin. Turn Tile Packs itself off once your packs are chosen, or they are drawn twice", position = 4, section = groundSection)
+    default boolean tilePacks() { return true; }
+
+    @ConfigItem(keyName = "showImportExport", name = "Import, export and sync", description = "Import, Export and Sync on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers and NPC Indicators", position = 5, section = groundSection)
     default boolean showImportExport() { return true; }
 
     // NPCs

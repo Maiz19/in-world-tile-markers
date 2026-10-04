@@ -31,8 +31,8 @@
  * markObject, findTileObject) and NPC Indicators (NpcIndicatorsPlugin.onMenuEntryAdded, tag) of
  * https://github.com/runelite/runelite, tag runelite-parent-1.13.1, BSD 2-Clause License; see META-INF/LICENSE-runelite
  * and THIRD_PARTY_NOTICES.md.
- * Changes for In-World Tile Markers: saved in its own settings, and marks without a color of their own (all but
- * imported tiles) follow the color options.
+ * Changes for In-World Tile Markers: saved in its own settings, marks without a color of their own (all but imported
+ * tiles) follow the color options, and the marks those plugins saved can be copied (their settings are only read).
  */
 package com.inworldtilemarkers;
 
@@ -46,6 +46,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.callback.ClientThread;
@@ -64,7 +65,8 @@ import net.runelite.client.util.WildcardMatcher;
 /**
  * Marking with Shift + right-click: tiles (Mark, Unmark, Label), objects (Mark object, Unmark object) and NPCs by name
  * (Tag-All, Un-tag-All), saved in In-World Tile Markers' own settings. Tiles can be imported from and exported to
- * the clipboard in Ground Markers' format.
+ * the clipboard in Ground Markers' format. The marks of Ground Markers, Object Markers and NPC Indicators are copied
+ * when In-World Tile Markers first starts in a profile, and again with Sync.
  */
 @Singleton
 final class Marking
@@ -74,6 +76,12 @@ final class Marking
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
     private static final WidgetMenuOption IMPORT = new WidgetMenuOption("Import", "In-World Tile Markers",
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    private static final WidgetMenuOption SYNC = new WidgetMenuOption("Sync", "In-World Tile Markers",
+        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    /** Set in a profile once the other plugins' marks were copied there. */
+    static final String COPIED = "copiedOtherMarks";
+    /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
+    private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators";
 
     private final Client client;
     private final ClientThread clientThread;
@@ -94,9 +102,13 @@ final class Marking
         this.objects = objects; this.menus = menus; this.chatbox = chatbox; this.chat = chat; this.gson = gson;
     }
 
-    void startUp() { importExportOptions(); }
+    void startUp()
+    {
+        importExportOptions();
+        clientThread.invokeLater(this::copyOnce);
+    }
 
-    void shutDown() { menus.removeManagedCustomMenu(EXPORT); menus.removeManagedCustomMenu(IMPORT); }
+    void shutDown() { menus.removeManagedCustomMenu(EXPORT); menus.removeManagedCustomMenu(IMPORT); menus.removeManagedCustomMenu(SYNC); }
 
     private void importExportOptions()
     {
@@ -104,6 +116,7 @@ final class Marking
         if (!config.showImportExport()) { return; }
         menus.addManagedCustomMenu(EXPORT, e -> exportTiles());
         menus.addManagedCustomMenu(IMPORT, e -> promptImport());
+        menus.addManagedCustomMenu(SYNC, e -> sync());
     }
 
     @Subscribe
@@ -113,7 +126,17 @@ final class Marking
     }
 
     @Subscribe
-    public void onProfileChanged(ProfileChanged e) { importExportOptions(); }
+    public void onProfileChanged(ProfileChanged e)
+    {
+        importExportOptions();
+        clientThread.invokeLater(this::copyOnce);
+    }
+
+    @Subscribe
+    public void onGameStateChanged(GameStateChanged e)
+    {
+        if (e.getGameState() == GameState.LOGGED_IN && pendingNotice != null) { message(pendingNotice); pendingNotice = null; }
+    }
 
     @Subscribe
     public void onMenuEntryAdded(MenuEntryAdded event)
@@ -231,16 +254,117 @@ final class Marking
     {
         Map<Integer, List<MarkerSources.TilePoint>> regions = new HashMap<>();
         for (MarkerSources.TilePoint p : imported) { regions.computeIfAbsent(p.regionId, r -> new ArrayList<>()).add(p); }
+        int added = addTiles(regions);
+        message(added + " tile markers were imported from the clipboard.");
+    }
+
+    /** Adds tiles to those marked in their region; tiles marked already stay as they are. Returns how many were new. */
+    private int addTiles(Map<Integer, List<MarkerSources.TilePoint>> regions)
+    {
+        int added = 0;
         for (Map.Entry<Integer, List<MarkerSources.TilePoint>> region : regions.entrySet())
         {
             List<MarkerSources.TilePoint> merged = new ArrayList<>(sources.tiles(region.getKey()));
+            int before = merged.size();
             for (MarkerSources.TilePoint p : region.getValue())
             {
                 if (merged.stream().noneMatch(p::same)) { merged.add(p); }
             }
-            saveTiles(region.getKey(), merged);
+            if (merged.size() > before) { saveTiles(region.getKey(), merged); added += merged.size() - before; }
         }
-        message(imported.size() + " tile markers were imported from the clipboard.");
+        return added;
+    }
+
+    // Copying other plugins' marks
+
+    /** The first start in a profile: the marks of Ground Markers, Object Markers and NPC Indicators are copied over. */
+    private void copyOnce()
+    {
+        if (configs.getConfiguration(InWorldTileMarkersConfig.GROUP, COPIED) != null) { return; }
+        configs.setConfiguration(InWorldTileMarkersConfig.GROUP, COPIED, "true");
+        String copied = copyOtherMarks();
+        if (copied != null)
+        {
+            notice("In-World Tile Markers copied your " + copied + ". Turn off the plugins they came from, or they are drawn twice."
+                + " Sync on the world map orb copies new ones.");
+        }
+    }
+
+    /** Sync: what the other plugins marked since is copied. */
+    private void sync()
+    {
+        String copied = copyOtherMarks();
+        message(copied == null ? "No new marks in Ground Markers, Object Markers or NPC Indicators." : "Copied " + copied + ".");
+    }
+
+    /**
+     * Copies what Ground Markers, Object Markers and NPC Indicators saved and is not marked here yet; their settings are
+     * only read. Returns what was copied ("12 tiles and 2 NPC names"), or null when nothing was new.
+     */
+    String copyOtherMarks()
+    {
+        List<String> parts = new ArrayList<>();
+        count(parts, copyGroundMarkers(), "tile");
+        count(parts, copyObjectMarkers(), "object");
+        count(parts, copyNpcNames(), "NPC name");
+        if (parts.isEmpty()) { return null; }
+        String last = parts.remove(parts.size() - 1);
+        return parts.isEmpty() ? last : String.join(", ", parts) + " and " + last;
+    }
+
+    private static void count(List<String> parts, int n, String what) { if (n > 0) { parts.add(n + " " + what + (n == 1 ? "" : "s")); } }
+
+    private int copyGroundMarkers()
+    {
+        Map<Integer, List<MarkerSources.TilePoint>> regions = new HashMap<>();
+        for (int region : regions(GROUND_MARKERS))
+        {
+            List<MarkerSources.TilePoint> points = MarkerSources.parse(gson, configs.getConfiguration(GROUND_MARKERS, "region_" + region));
+            points.removeIf(p -> p.regionId != region);
+            regions.put(region, points);
+        }
+        return addTiles(regions);
+    }
+
+    private int copyObjectMarkers()
+    {
+        int added = 0;
+        for (int region : regions(OBJECT_MARKERS))
+        {
+            List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
+            int before = points.size();
+            for (ObjectMarkerSource.ObjectPoint p : ObjectMarkerSource.parse(gson, configs.getConfiguration(OBJECT_MARKERS, "region_" + region)))
+            {
+                if (points.stream().noneMatch(o -> o.id == p.id && o.regionX == p.regionX && o.regionY == p.regionY && o.z == p.z)) { points.add(p); }
+            }
+            if (points.size() > before) { saveObjects(region, points); added += points.size() - before; }
+        }
+        return added;
+    }
+
+    private int copyNpcNames()
+    {
+        List<String> names = new ArrayList<>(Text.fromCSV(config.npcNames()));
+        int before = names.size();
+        for (String name : Text.fromCSV(Strings.nullToEmpty(configs.getConfiguration(NPC_INDICATORS, "npcToHighlight"))))
+        {
+            if (names.stream().noneMatch(name::equalsIgnoreCase)) { names.add(name); }
+        }
+        if (names.size() > before) { configs.setConfiguration(InWorldTileMarkersConfig.GROUP, NPC_NAMES, Text.toCSV(names)); }
+        return names.size() - before;
+    }
+
+    /** The regions a plugin saved marks for: its settings region_<id>. */
+    private List<Integer> regions(String group)
+    {
+        String prefix = ConfigManager.getWholeKey(group, null, "region_");
+        List<Integer> regions = new ArrayList<>();
+        for (String key : configs.getConfigurationKeys(prefix))
+        {
+            try { regions.add(Integer.parseInt(key.substring(prefix.length()))); }
+            catch (NumberFormatException ignored) { /* Not a region. */ }
+        }
+        return regions;
     }
 
     // Objects
@@ -276,11 +400,16 @@ final class Marking
         // On the object's own floor, as the marks are matched (ObjectMarkerSource.check).
         WorldPoint point = WorldPoint.fromLocalInstance(client, object.getLocalLocation(), object.getPlane());
         int region = point.getRegionID();
-        List<ObjectMarkerSource.ObjectPoint> points = new ArrayList<>(objects.points(region));
+        List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
         // The same object, or a multiloc marked under another name, or another id spawned with the same name.
         boolean removed = points.removeIf(p -> (p.id == object.getId() || p.name.equals(name))
             && p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane());
         if (!removed) { points.add(new ObjectMarkerSource.ObjectPoint(object.getId(), name, point.getRegionX(), point.getRegionY(), point.getPlane())); }
+        saveObjects(region, points);
+    }
+
+    private void saveObjects(int region, List<ObjectMarkerSource.ObjectPoint> points)
+    {
         if (points.isEmpty()) { configs.unsetConfiguration(InWorldTileMarkersConfig.GROUP, ObjectMarkerSource.KEY + region); }
         else { configs.setConfiguration(InWorldTileMarkersConfig.GROUP, ObjectMarkerSource.KEY + region, gson.toJson(points)); }
     }
@@ -340,5 +469,21 @@ final class Marking
     private void message(String text)
     {
         chat.queue(QueuedMessage.builder().type(ChatMessageType.CONSOLE).runeLiteFormattedMessage(text).build());
+    }
+
+    /** A notice shown when logged in: now, or at the next login. */
+    private String pendingNotice;
+
+    private void notice(String text)
+    {
+        if (client.getGameState() == GameState.LOGGED_IN) { message(text); } else { pendingNotice = text; }
+    }
+
+    /** A notice shown once per profile. */
+    void noticeOnce(String key, String text)
+    {
+        if (configs.getConfiguration(InWorldTileMarkersConfig.GROUP, key) != null) { return; }
+        configs.setConfiguration(InWorldTileMarkersConfig.GROUP, key, "true");
+        notice(text);
     }
 }
