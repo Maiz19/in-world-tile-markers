@@ -214,6 +214,7 @@ public class InWorldTileMarkersPlugin extends Plugin
             sources.objectsEnabled = enabled(ObjectIndicatorsPlugin.class);
             sources.npcsEnabled = enabled(NpcIndicatorsPlugin.class);
             TileCapture.extendTo = config.extendRanges() ? MarkerSources.drawDistance(config) : 0;
+            TileCapture.scaleRound = config.scaleTimers();
             // Replace the original overlays unless the scene route has actually failed. Without GPU
             // In-World Tile Markers draws 2D itself; merely not having drawn a frame yet (start-up) is not a failure.
             boolean drawing = !client.isGpu() || sceneActive();

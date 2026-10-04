@@ -25,6 +25,8 @@ While In-World Tile Markers draws a plugin's marks, that plugin's own drawing of
 
 **Extend plugin ranges** keeps the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder, Tile Packs, NPC Aggression Timer) up to the draw distance, once you have seen them.
 
+**Timers scale with the world** (on by default) keeps other plugins' timer pies at their size next to their rock as you zoom. Off, they keep the same size on screen, as their plugin draws them.
+
 ## Limits
 
 - The scene drawing needs GPU or an HD renderer.

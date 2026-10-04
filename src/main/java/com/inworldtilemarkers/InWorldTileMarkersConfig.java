@@ -82,7 +82,10 @@ public interface InWorldTileMarkersConfig extends Config
     @ConfigItem(keyName = "extendRanges", name = "Extend plugin ranges", description = "Keep drawing the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder: about 18 tiles; Tile Packs: 32; NPC Aggression Timer: 20) up to the draw distance, once you have seen them", position = 6, section = generalSection)
     default boolean extendRanges() { return false; }
 
-    @ConfigItem(keyName = "ignoreQuestHelperWarning", name = "Ignore Quest Helper notice", description = "Don't show the chat notice about Quest Helper's outline styles, which stay 2D", position = 7, section = generalSection)
+    @ConfigItem(keyName = "scaleTimers", name = "Timers scale with the world", description = "Other plugins' timer pies keep their size next to their rock as you zoom. Off: the same size on screen at every zoom, as their plugin draws them", position = 7, section = generalSection)
+    default boolean scaleTimers() { return true; }
+
+    @ConfigItem(keyName = "ignoreQuestHelperWarning", name = "Ignore Quest Helper notice", description = "Don't show the chat notice about Quest Helper's outline styles, which stay 2D", position = 8, section = generalSection)
     default boolean ignoreQuestHelperWarning() { return false; }
 
     // Ground Markers

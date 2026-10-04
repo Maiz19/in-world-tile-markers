@@ -52,6 +52,8 @@ final class TileCapture implements SourcePlugin.Source
     boolean squareRange;
     /** Local units up to which marks beyond a plugin's own range are kept; 0 when "Extend plugin ranges" is off. */
     static int extendTo;
+    /** "Timers scale with the world": round shapes are sized as part of the world (see worldPerPixel). */
+    static boolean scaleRound = true;
     private final Map<String, Marker> seen = new HashMap<>();
     private final Map<String, ModelTarget> seenModels = new HashMap<>();
     /** Clickboxes and hulls whose object or NPC is found (ShapeIdentifier) are drawn live in the scene; null: not tried. */
@@ -380,7 +382,7 @@ final class TileCapture implements SourcePlugin.Source
         m.lift = Math.round(g[2]);
         m.offX = new float[points.length / 2];
         m.offY = new float[points.length / 2];
-        float units = worldPerPixel(wv, plane, camera);
+        float units = scaleRound ? worldPerPixel(wv, plane, camera) : 0;
         m.worldSized = units > 0;
         for (int i = 0; i < m.offX.length; i++)
         {
