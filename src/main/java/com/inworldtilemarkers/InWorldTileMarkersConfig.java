@@ -77,7 +77,7 @@ public interface InWorldTileMarkersConfig extends Config
     default boolean predictWalk() { return true; }
 
     @ConfigItem(keyName = "otherPlugins", name = "Other plugins' marks", description = "Also draw the tile highlights, clickboxes and hulls of other plugins you use in the scene (see the guide). Off: they draw them themselves", position = 5, section = generalSection)
-    default boolean otherPlugins() { return true; }
+    default boolean otherPlugins() { return false; }
 
     @ConfigItem(keyName = "extendRanges", name = "Extend plugin ranges", description = "Keep drawing the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder: about 18 tiles; Tile Packs: 32; NPC Aggression Timer: 20) up to the draw distance, once you have seen them", position = 6, section = generalSection)
     default boolean extendRanges() { return false; }

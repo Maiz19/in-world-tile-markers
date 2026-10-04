@@ -21,7 +21,7 @@ The tile highlights, clickboxes, hulls, path lines and timer pies these plugins 
 - RuneLite: Agility, Blast Furnace, Blast Mine, Cannon, Fishing, Ground Items, Herbiboar, Implings, Kourend Library, Mage Training Arena, Mining, Motherlode Mine, NPC Aggression Timer, Party, Pest Control, Player Indicators (not in PvP worlds or the Wilderness), Pyramid Plunder, Runecraft and Woodcutting.
 - Plugin Hub: Advanced Mining, Better NPC Highlight (the NPCs in its name lists and your Slayer task), Clue Details, Game Tick Information, Mahogany Homes, Motherlode Mine Improved, Port Tasks, Quest Helper, Remaining Amethyst, Rogues' Den, Rooftop Agility Improved, Sailing, Shortest Path, Star Info, Stealing Artefacts, Stop Misclicking Tiles, The Gauntlet and Tile Packs.
 
-While In-World Tile Markers draws a plugin's marks, that plugin's own drawing of those marks pauses, so nothing is drawn twice. Its text, icons, timers, menus, panels and settings keep working, and its own drawing returns as soon as In-World Tile Markers stops. Turn **Other plugins' marks** off to leave all of them to their own plugins.
+While In-World Tile Markers draws a plugin's marks, that plugin's own drawing of those marks pauses, so nothing is drawn twice. Its text, icons, timers, menus, panels and settings keep working, and its own drawing returns as soon as In-World Tile Markers stops. This is off by default: turn on **Other plugins' marks** to use it.
 
 **Extend plugin ranges** keeps the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder, Tile Packs, NPC Aggression Timer) up to the draw distance, once you have seen them.
 
