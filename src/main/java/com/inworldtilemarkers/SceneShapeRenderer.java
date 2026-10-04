@@ -244,12 +244,10 @@ final class SceneShapeRenderer
         if (unavailable || m.point.getWorldView() != wv.getId()) { return false; }
         if ((m.borderWidth <= 0 || m.color.getAlpha() == 0) && m.fill.getAlpha() == 0) { return culled(m.key); }
         layer = m.layer;
-        LocalPoint at = m.where();
+        LocalPoint at = m.point;
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
         int height = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
-        if (m.dot || m.offX != null) { return screen(m, at, level, height); }
-        if (m.quadX != null) { return quad(wv, m, at, level, height); }
-        if (m.lineX != null) { return line(wv, m, at, level); }
+        if (m.dot) { return dot(m, at, level, height); }
         int w = m.width, h = m.height, n = 2 * (w + h);
         ensure(n);
         int x0 = at.getX() - w * 64, y0 = at.getY() - h * 64, k = 0;
@@ -270,8 +268,8 @@ final class SceneShapeRenderer
 
     /**
      * The four corner lines of a footprint, each 1/divisor of its side along the
-     * projected perimeter, as Corner Tile Indicators' and Better NPC Highlight's
-     * renderPolygonCorners do on screen.
+     * projected perimeter, as Corner Tile Indicators' renderPolygonCorners
+     * does on screen.
      */
     private void corners(Marker m, LocalPoint at, int w, int h, int level)
     {
@@ -312,47 +310,18 @@ final class SceneShapeRenderer
         return draw(m.key, at, level, m.color, fill, m.borderWidth > 0);
     }
 
-    /** A free quadrilateral on the ground, each side sampled in four steps to follow the terrain. */
-    private boolean quad(WorldView wv, Marker m, LocalPoint at, int level, int height)
-    {
-        int steps = 4, n = 4 * steps, k = 0;
-        ensure(n);
-        for (int c = 0; c < 4 && k >= 0; c++)
-        {
-            int x0 = m.quadX[c], y0 = m.quadY[c], x1 = m.quadX[(c + 1) % 4], y1 = m.quadY[(c + 1) % 4];
-            for (int s = 0; s < steps && k >= 0; s++)
-            {
-                int x = x0 + (x1 - x0) * s / steps, y = y0 + (y1 - y0) * s / steps;
-                k = sample(wv, level, Math.max(0, x), Math.max(0, y), k);
-            }
-        }
-        return shape(m, at, level, k >= 0 && around(at, height, n, m.borderWidth), m.fill);
-    }
-
-    /** An open polyline on the ground, each vertex at the terrain height of its own point. */
-    private boolean line(WorldView wv, Marker m, LocalPoint at, int level)
-    {
-        int n = m.lineX.length, k = 0;
-        if (n < 2 || m.borderWidth <= 0) { return false; }
-        ensure(n);
-        for (int i = 0; i < n && k >= 0; i++) { k = sample(wv, level, Math.max(0, m.lineX[i]), Math.max(0, m.lineY[i]), k); }
-        return shape(m, at, level, k >= 0 && outline.buildStrip(px, py, pd, n, width(m.borderWidth)), Marker.NO_FILL);
-    }
-
     /** Path Marker's dot style: an 8 pixel circle. */
     static final float[] DOT_X = new float[16], DOT_Y = new float[16];
     static { for (int i = 0; i < 16; i++) { DOT_X[i] = (float) Math.cos(i * Math.PI / 8) * 4; DOT_Y[i] = (float) Math.sin(i * Math.PI / 8) * 4; } }
 
-    /** A shape on the screen around the marker's point (Marker.offX, or the dot), in pixels or as part of the world. */
-    private boolean screen(Marker m, LocalPoint at, int level, int height)
+    /** The dot around the tile's centre, its size in screen pixels. */
+    private boolean dot(Marker m, LocalPoint at, int level, int height)
     {
-        float[] ox = m.dot ? DOT_X : m.offX, oy = m.dot ? DOT_Y : m.offY;
-        int n = ox.length;
+        int n = DOT_X.length;
         ensure(n);
-        camera.project(at.getX(), at.getY(), height - m.lift, point);
+        camera.project(at.getX(), at.getY(), height, point);
         if (!(point[2] >= PARTIAL_NEAR)) { return false; }
-        float scale = m.dot ? pixel : m.worldSized ? camera.scale / point[2] : 1;
-        for (int i = 0; i < n; i++) { px[i] = point[0] + ox[i] * scale; py[i] = point[1] + oy[i] * scale; pd[i] = point[2]; }
+        for (int i = 0; i < n; i++) { px[i] = point[0] + DOT_X[i] * pixel; py[i] = point[1] + DOT_Y[i] * pixel; pd[i] = point[2]; }
         return shape(m, at, level, outline.buildPolygon(px, py, pd, n, width(m.borderWidth), false), m.fill);
     }
 
@@ -369,7 +338,7 @@ final class SceneShapeRenderer
     /** Draws a model hull or clickbox; returns whether it is in the scene this frame. */
     boolean model(ModelTarget t)
     {
-        layer = t.layer;
+        layer = HULL_LAYER;
         LocalPoint location = t.location();
         if (unavailable || location == null || location.getWorldView() != client.getTopLevelWorldView().getId())
         { return false; }

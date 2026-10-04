@@ -492,7 +492,7 @@ final class PathTracker extends Overlay implements KeyListener
         WorldView wv = client.getLocalPlayer().getWorldView();
         boolean dot = (active ? config.activePathMarkerStyle() : config.hoverPathMarkerStyle()) == MarkerStyle.DOT;
         Marker m = new Marker((active ? "path:a:" : "path:h:") + tile.getX() + ":" + tile.getY(), MarkerSources.local(wv, tile), wv.getPlane(), 1, 1,
-            color(active, main, false), color(active, main, true), dot ? 2 : config.pathBorderWidth(), null, false);
+            color(active, main, false), color(active, main, true), dot ? 2 : config.pathBorderWidth(), null);
         m.dot = dot;
         m.layer = active ? Marker.PATH_ACTIVE : Marker.PATH_HOVER;
         return m;

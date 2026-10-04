@@ -29,14 +29,13 @@
  * https://github.com/runelite/runelite, tag runelite-parent-1.12.39.
  * Copyright (c) 2018, Tomas Slusny <slusnucky@gmail.com>
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
- * BSD 2-Clause License; see THIRD_PARTY_NOTICES.md. Changes for In-World Tile Markers:
- * read-only (never saves), no menus, and returns marks for In-World Tile Markers' renderer instead of drawing.
+ * BSD 2-Clause License; see THIRD_PARTY_NOTICES.md. Changes for In-World Tile Markers: its own saved marks and styles,
+ * and marks returned to In-World Tile Markers' renderer instead of drawn.
  */
 package com.inworldtilemarkers;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
-import com.google.gson.annotations.SerializedName;
 import java.awt.Color;
 import java.util.*;
 import javax.inject.Inject;
@@ -44,100 +43,94 @@ import javax.inject.Singleton;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.config.ConfigManager;
-import net.runelite.client.plugins.objectindicators.ObjectIndicatorsConfig;
 
-/**
- * The objects marked with Object Markers, read from its saved configuration.
- * Object Markers keeps its menus and remains the owner of the data.
- */
+/** The objects marked with Mark object, saved per region of the map. */
 @Singleton
 final class ObjectMarkerSource
 {
-    static final String GROUP = "objectindicators";
+    /** Config key prefix of a region's marked objects. */
+    static final String KEY = "objects_";
     static final int HF_HULL = 0x1, HF_OUTLINE = 0x2, HF_CLICKBOX = 0x4, HF_TILE = 0x8;
 
     private final Client client;
     private final ConfigManager configs;
     private final Gson gson;
-    private final ObjectIndicatorsConfig config;
+    private final InWorldTileMarkersConfig config;
     private final Map<Integer, List<ObjectPoint>> points = new HashMap<>();
     private final List<Marked> objects = new ArrayList<>();
-    private boolean valid = true;
 
     @Inject
-    ObjectMarkerSource(Client client, ConfigManager configs, Gson gson)
+    ObjectMarkerSource(Client client, ConfigManager configs, Gson gson, InWorldTileMarkersConfig config)
     {
-        this.client = client; this.configs = configs; this.gson = gson;
-        config = configs.getConfig(ObjectIndicatorsConfig.class);
+        this.client = client; this.configs = configs; this.gson = gson; this.config = config;
     }
 
-    /** A marked object, with Object Markers' per-object settings. */
+    /** A marked object in the scene. */
     static final class Marked
     {
         final TileObject object;
         final ObjectComposition composition;
         final String name;
-        final Color borderColor, fillColor;
-        final int flags;
 
-        Marked(TileObject object, ObjectComposition composition, String name, Color borderColor, Color fillColor, int flags)
+        Marked(TileObject object, ObjectComposition composition, String name)
         {
             this.object = object; this.composition = composition; this.name = name;
-            this.borderColor = borderColor; this.fillColor = fillColor; this.flags = flags;
         }
     }
 
-    /** Object Markers' saved format. */
+    /** A marked object as saved: the object on this tile, and its name. */
     static final class ObjectPoint
     {
-        int id = -1;
-        String name;
-        int regionX, regionY, z;
-        @SerializedName("color")
-        Color borderColor;
-        Color fillColor;
-        Boolean hull, outline, clickbox, tile;
+        final int id;
+        final String name;
+        final int regionX, regionY, z;
+
+        ObjectPoint(int id, String name, int regionX, int regionY, int z)
+        {
+            this.id = id; this.name = name; this.regionX = regionX; this.regionY = regionY; this.z = z;
+        }
     }
 
-    /** The marked objects; their saved points stay parsed (per region) until Object Markers' settings change. */
+    /** The marked objects; their saved points stay parsed (per region) until they change. */
     void clear() { objects.clear(); }
 
-    /** Object Markers' settings changed: its saved points are read again. */
-    void clearPoints() { points.clear(); valid = true; }
+    /** The saved points changed: they are read again. */
+    void clearPoints() { points.clear(); }
 
-    boolean valid() { return valid; }
+    /** A region's saved points, read once. */
+    List<ObjectPoint> points(int region)
+    {
+        return points.computeIfAbsent(region, r -> {
+            String json = configs.getConfiguration(InWorldTileMarkersConfig.GROUP, KEY + r);
+            List<ObjectPoint> list = new ArrayList<>();
+            if (Strings.isNullOrEmpty(json)) { return list; }
+            try
+            {
+                for (ObjectPoint p : gson.fromJson(json, ObjectPoint[].class))
+                {
+                    if (p != null && p.name != null && !p.name.equals("null")) { list.add(p); }
+                }
+            }
+            catch (RuntimeException ex) { list.clear(); }
+            return list;
+        });
+    }
 
     /** Loads the points of every loaded region; objects are matched as the scene is visited. */
     void load(WorldView wv)
     {
         if (wv == null || wv.getMapRegions() == null) { return; }
-        for (int region : wv.getMapRegions())
-        {
-            if (points.containsKey(region)) { continue; }
-            String json = configs.getConfiguration(GROUP, "region_" + region);
-            if (Strings.isNullOrEmpty(json)) { continue; }
-            try
-            {
-                List<ObjectPoint> list = new ArrayList<>();
-                for (ObjectPoint p : gson.fromJson(json, ObjectPoint[].class))
-                {
-                    // As Object Markers: points named "null" are ambiguous legacy marks.
-                    if (p != null && p.name != null && !p.name.equals("null")) { list.add(p); }
-                }
-                points.put(region, list);
-            }
-            catch (RuntimeException ex) { valid = false; }
-        }
+        for (int region : wv.getMapRegions()) { points(region); }
     }
 
-    /** Object Markers' checkObjectPoints. */
+    /** As Object Markers' checkObjectPoints. */
     void check(TileObject object)
     {
         // No saved points loaded (as during a scene load, before the rebuild): nothing to match.
         if (object == null || object.getPlane() < 0 || points.isEmpty()) { return; }
         WorldPoint worldPoint = WorldPoint.fromLocalInstance(client, object.getLocalLocation(), object.getPlane());
         List<ObjectPoint> regionPoints = points.get(worldPoint.getRegionID());
-        if (regionPoints == null) { return; }
+        if (regionPoints == null || regionPoints.isEmpty()) { return; }
         ObjectComposition composition = client.getObjectDefinition(object.getId());
         if (composition == null) { return; }
         if (composition.getImpostorIds() == null)
@@ -151,10 +144,8 @@ final class ObjectMarkerSource
             if (worldPoint.getRegionX() == p.regionX && worldPoint.getRegionY() == p.regionY
                 && worldPoint.getPlane() == p.z && p.id == object.getId())
             {
-                int flags = (p.hull == Boolean.TRUE ? HF_HULL : 0) | (p.outline == Boolean.TRUE ? HF_OUTLINE : 0)
-                    | (p.clickbox == Boolean.TRUE ? HF_CLICKBOX : 0) | (p.tile == Boolean.TRUE ? HF_TILE : 0);
                 remove(object);
-                objects.add(new Marked(object, composition, p.name, p.borderColor, p.fillColor, flags));
+                objects.add(new Marked(object, composition, p.name));
                 break;
             }
         }
@@ -162,18 +153,26 @@ final class ObjectMarkerSource
 
     void remove(TileObject object) { objects.removeIf(o -> o.object == object); }
 
+    /** Whether this object is marked, as found in the scene. */
+    boolean marked(TileObject object)
+    {
+        for (Marked m : objects) { if (m.object == object) { return true; } }
+        return false;
+    }
+
     void removeWorldView(WorldView wv) { objects.removeIf(o -> o.object.getWorldView() == wv); }
 
-    /**
-     * Marks to draw now, with defaults resolved as in ObjectIndicatorsOverlay.render:
-     * the per-object style, else the configured one; missing colors from the config.
-     */
+    /** Marks to draw now, in the styles chosen in the settings, as ObjectIndicatorsOverlay.render resolves them. */
     List<Resolved> visible()
     {
         if (objects.isEmpty()) { return Collections.emptyList(); }
         WorldView top = client.getTopLevelWorldView();
-        int defaultFlags = (config.highlightHull() ? HF_HULL : 0) | (config.highlightOutline() ? HF_OUTLINE : 0)
-            | (config.highlightClickbox() ? HF_CLICKBOX : 0) | (config.highlightTile() ? HF_TILE : 0);
+        int flags = (config.objectHull() ? HF_HULL : 0) | (config.objectOutline() ? HF_OUTLINE : 0)
+            | (config.objectClickbox() ? HF_CLICKBOX : 0) | (config.objectTile() ? HF_TILE : 0);
+        Color border = config.objectColor();
+        // The hull's fill as Object Markers' default (a=50); clickbox and tile use the border color at a/12.
+        Color hullFill = new Color(0, 0, 0, 50);
+        Color otherFill = new Color(border.getRed(), border.getGreen(), border.getBlue(), border.getAlpha() / 12);
         List<Resolved> result = new ArrayList<>();
         for (Marked m : objects)
         {
@@ -189,13 +188,7 @@ final class ObjectMarkerSource
                 if (composition == null || Strings.isNullOrEmpty(composition.getName())
                     || "null".equals(composition.getName()) || !composition.getName().equals(m.name)) { continue; }
             }
-            Color border = m.borderColor != null ? m.borderColor : config.markerColor();
-            int flags = m.flags != 0 ? m.flags : defaultFlags;
-            // Default hull fill is a=50, clickbox and tile use the border color at a/12.
-            Color hullFill = m.fillColor != null ? m.fillColor : new Color(0, 0, 0, 50);
-            Color otherFill = m.fillColor != null ? m.fillColor
-                : new Color(border.getRed(), border.getGreen(), border.getBlue(), border.getAlpha() / 12);
-            result.add(new Resolved(m.object, flags, border, hullFill, otherFill, config.borderWidth(), config.outlineFeather()));
+            result.add(new Resolved(m.object, flags, border, hullFill, otherFill, config.objectBorderWidth()));
         }
         return result;
     }
@@ -203,14 +196,14 @@ final class ObjectMarkerSource
     static final class Resolved
     {
         final TileObject object;
-        final int flags, feather;
+        final int flags;
         final Color border, hullFill, otherFill;
         final double borderWidth;
 
-        Resolved(TileObject object, int flags, Color border, Color hullFill, Color otherFill, double borderWidth, int feather)
+        Resolved(TileObject object, int flags, Color border, Color hullFill, Color otherFill, double borderWidth)
         {
             this.object = object; this.flags = flags; this.border = border; this.hullFill = hullFill;
-            this.otherFill = otherFill; this.borderWidth = borderWidth; this.feather = feather;
+            this.otherFill = otherFill; this.borderWidth = borderWidth;
         }
     }
 }

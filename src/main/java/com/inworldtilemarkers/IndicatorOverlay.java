@@ -6,7 +6,6 @@ import net.runelite.api.Client;
 import net.runelite.api.Perspective;
 import net.runelite.api.Point;
 import net.runelite.api.NPC;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 import net.runelite.client.ui.overlay.*;
 
@@ -20,10 +19,12 @@ final class IndicatorOverlay extends Overlay
     private final InWorldTileMarkersPlugin plugin;
     private final ModelOutlineRenderer outlines;
     private final MarkerSources sources;
+    private final InWorldTileMarkersConfig config;
 
-    @Inject IndicatorOverlay(Client client, InWorldTileMarkersPlugin plugin, ModelOutlineRenderer outlines, MarkerSources sources)
+    @Inject IndicatorOverlay(Client client, InWorldTileMarkersPlugin plugin, ModelOutlineRenderer outlines, MarkerSources sources,
+        InWorldTileMarkersConfig config)
     {
-        this.client = client; this.plugin = plugin; this.outlines = outlines; this.sources = sources;
+        this.client = client; this.plugin = plugin; this.outlines = outlines; this.sources = sources; this.config = config;
         setLayer(OverlayLayer.ABOVE_SCENE);
         setPosition(OverlayPosition.DYNAMIC);
         setPriority(PRIORITY_LOW);
@@ -39,22 +40,19 @@ final class IndicatorOverlay extends Overlay
             for (ObjectMarkerSource.Resolved o : sources.objectOutlines())
             {
                 if (!sceneObjectOutlines.contains(o.object))
-                { outlines.drawOutline(o.object, (int) o.borderWidth, o.border, o.feather); }
+                { outlines.drawOutline(o.object, (int) o.borderWidth, o.border, 0); }
             }
             for (NPC npc : sources.npcOutlines())
             {
                 if (!plugin.markerInScene("npc:" + npc.getIndex() + ":outline"))
-                { outlines.drawOutline(npc, (int) sources.npcConfig().borderWidth(), sources.npcColor(npc), sources.npcConfig().outlineFeather()); }
+                { outlines.drawOutline(npc, (int) config.npcBorderWidth(), config.npcColor(), 0); }
             }
-            // Shortest Path's overlay, run once: its tile fills and lines go to the scene, its text is drawn here.
-            // Core plugins' overlays (Ground Items, Fishing, Cannon, ...), run once the same way.
-            plugin.renderCaptured(g);
             for (ModelTarget t : plugin.modelTargets())
             {
                 if (plugin.markerInScene(t.key)) { continue; }
                 if (t.outline)
                 {
-                    // Core NPC/Object outline styles retain their own feather settings above.
+                    // Tagged NPCs' outlines are drawn above; other plugins' NPC outlines (ExternalMarks) here.
                     if (t.npc != null && !t.key.startsWith("npc:"))
                     { outlines.drawOutline(t.npc, (int) t.borderWidth, t.color, 0); }
                     continue;
@@ -78,11 +76,9 @@ final class IndicatorOverlay extends Overlay
             }
             for (Marker m : ordered)
             {
-                // Without replacement the original Ground Markers overlay draws these.
-                if (m.ground && !plugin.replacedGround()) { continue; }
                 if (!plugin.markerInScene(m.key))
                 {
-                    Shape shape = m.dot || m.offX != null ? screen(m) : m.lineX != null ? line(m) : polygon(m);
+                    Shape shape = m.dot ? dot(m) : polygon(m);
                     if (shape != null) { draw(g, shape, m); }
                 }
                 if (m.label != null && !m.label.isEmpty())
@@ -125,56 +121,21 @@ final class IndicatorOverlay extends Overlay
         }
     }
 
-    /** A screen shape marker (Marker.offX) around where its point projects. */
-    private Shape screen(Marker m)
+    /** Path Marker's dot style: a small circle around where the tile's centre projects. */
+    private Shape dot(Marker m)
     {
-        Point p = Perspective.localToCanvas(client, m.point, m.plane, m.lift);
+        Point p = Perspective.localToCanvas(client, m.point, m.plane);
         if (p == null) { return null; }
         java.awt.geom.Path2D.Float path = new java.awt.geom.Path2D.Float();
-        float[] ox = m.dot ? SceneShapeRenderer.DOT_X : m.offX, oy = m.dot ? SceneShapeRenderer.DOT_Y : m.offY;
-        // Sized as part of the world: scaled by the camera now (Marker.worldSized).
-        float scale = 1;
-        if (m.worldSized)
+        for (int i = 0; i < SceneShapeRenderer.DOT_X.length; i++)
         {
-            ModelShapes.Camera camera = ModelShapes.Camera.of(client);
-            float[] q = new float[3];
-            camera.project(m.point.getX(), m.point.getY(), Perspective.getTileHeight(client, m.point, m.plane) - m.lift, q);
-            if (!(q[2] > 0)) { return null; }
-            scale = camera.scale / q[2];
-        }
-        for (int i = 0; i < ox.length; i++)
-        {
-            float x = p.getX() + ox[i] * scale, y = p.getY() + oy[i] * scale;
+            float x = p.getX() + SceneShapeRenderer.DOT_X[i], y = p.getY() + SceneShapeRenderer.DOT_Y[i];
             if (i == 0) { path.moveTo(x, y); } else { path.lineTo(x, y); }
         }
         path.closePath();
         return path;
     }
 
-    /** An open polyline marker, projected point by point. */
-    private Shape line(Marker m)
-    {
-        java.awt.geom.Path2D.Float path = new java.awt.geom.Path2D.Float();
-        for (int i = 0; i < m.lineX.length; i++)
-        {
-            Point p = Perspective.localToCanvas(client, new LocalPoint(m.lineX[i], m.lineY[i], m.point.getWorldView()), m.plane);
-            if (p == null) { return null; }
-            if (i == 0) { path.moveTo(p.getX(), p.getY()); } else { path.lineTo(p.getX(), p.getY()); }
-        }
-        return path;
-    }
-
-    /** The footprint's corners (or a free quadrilateral's) on the canvas, or null. */
-    private Polygon polygon(Marker m)
-    {
-        if (m.quadX == null) { return Perspective.getCanvasTileAreaPoly(client, m.where(), m.width, m.height, m.plane, 0); }
-        Polygon result = new Polygon();
-        for (int i = 0; i < 4; i++)
-        {
-            Point p = Perspective.localToCanvas(client, new LocalPoint(m.quadX[i], m.quadY[i], m.point.getWorldView()), m.plane);
-            if (p == null) { return null; }
-            result.addPoint(p.getX(), p.getY());
-        }
-        return result;
-    }
+    /** The footprint's corners on the canvas, or null. */
+    private Polygon polygon(Marker m) { return Perspective.getCanvasTileAreaPoly(client, m.point, m.width, m.height, m.plane, 0); }
 }

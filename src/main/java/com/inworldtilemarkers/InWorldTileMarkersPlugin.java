@@ -4,7 +4,6 @@ import com.google.inject.Provides;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Predicate;
 import javax.inject.Inject;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
@@ -18,18 +17,12 @@ import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.events.PluginChanged;
 import net.runelite.client.plugins.*;
-import net.runelite.client.plugins.groundmarkers.GroundMarkerPlugin;
-import net.runelite.client.plugins.groundmarkers.GroundMarkerOverlay;
-import net.runelite.client.plugins.npchighlight.NpcIndicatorsPlugin;
-import net.runelite.client.plugins.objectindicators.ObjectIndicatorsPlugin;
 import net.runelite.client.ui.overlay.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @PluginDescriptor(name = "In-World Tile Markers", description = "Sharp tile, NPC, object and path markers drawn in the game world, also in stretched mode",
     tags = {"tiles", "markers", "npcs", "objects", "path", "stretched"})
-// Better NPC Highlight's Slayer task highlights: the Slayer plugin's targets (SlayerPluginService).
-@PluginDependency(net.runelite.client.plugins.slayer.SlayerPlugin.class)
 public class InWorldTileMarkersPlugin extends Plugin
 {
     /**
@@ -47,29 +40,11 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Inject private SceneShapeRenderer renderer;
     @Inject private PathTracker paths;
     @Inject private ExternalMarks externalMarks;
-    @Inject private AggroAreaSource aggroArea;
+    @Inject private Marking marking;
     @Inject private IndicatorOverlay overlay;
     @Inject private OverlayManager overlays;
     @Inject private PluginManager plugins;
     @Inject private ConfigManager configManager;
-    /** Ground Markers and Object Markers, whose marks In-World Tile Markers draws from their saved settings. */
-    private SourcePlugin groundPlugin, objectPlugin;
-    /** The other plugins whose marks In-World Tile Markers draws, in the order they are collected. */
-    private final List<SourcePlugin> sourcePlugins = new ArrayList<>();
-    /**
-     * Plugins whose marks are drawn from their own world overlays (TileCapture), by their name in the plugin list: every
-     * tile, line, clickbox, hull and timer they draw in the world goes to the scene; their text and icons stay 2D.
-     */
-    private static final String[] CAPTURED = {
-        "Ground Items", "Fishing", "Implings", "Cannon", "Party", "Herbiboar", "Pest Control", "Kourend Library", "Blast Mine",
-        "Mage Training Arena", "Woodcutting", "Player Indicators", "Mining", "Motherlode Mine", "Motherlode Mine Improved",
-        "Advanced Mining", "StopMisclickingTiles", "Game Tick Info", "Clue Details", "Better NPC Highlight", "Tile Packs",
-        "Mahogany Homes", "Rooftop Agility Improved", "Agility", "Stealing Artefacts", "Blast Furnace", "Runecraft",
-        "Pyramid Plunder", "Rogues' Den", "Star Info", "The Gauntlet", "Quest Helper", "Shortest Path", "Remaining Amethyst", "Port Tasks",
-    };
-    /** Sailing's sea overlays; the ones on the boat itself stay its own. */
-    private static final java.util.Set<String> SAILING_OVERLAYS = new java.util.HashSet<>(java.util.Arrays.asList("RapidsOverlay",
-        "LightningCloudsOverlay", "SalvagingHighlight", "LostCargoHighlighter", "TrueTileIndicator"));
     private volatile boolean running, dirty;
     /**
      * After a failure the marks are 2D for a moment, then tried again: 2 seconds, twice as long after each failure in a
@@ -91,62 +66,13 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Override protected void startUp()
     {
         running = true; dirty = true; failedUntil = 0; sceneUnavailable = false;
-        // Config and plugin changes while stopped were not delivered to this instance.
+        // Config changes while stopped were not delivered to this instance.
         objectMarkers.clearPoints();
-        SourcePlugin.pluginsChanged();
         // The shadow transparency notice shows again after turning the plugin on (or installing it).
         warnedShadowTransparency = false;
-        warnedQuestHelper = false;
-        if (sourcePlugins.isEmpty())
-        {
-            groundPlugin = new SourcePlugin(overlays, plugins, GroundMarkerPlugin.class.getName(), o -> o instanceof GroundMarkerOverlay);
-            // Object Markers' overlay class is not public; RuneLite names overlays after their class.
-            objectPlugin = new SourcePlugin(overlays, plugins, ObjectIndicatorsPlugin.class.getName(), o -> "ObjectIndicatorsOverlay".equals(o.getName()));
-            // Sailing: its sea overlays; the ones on the boat itself stay its own.
-            TileCapture.Index tiles = new TileCapture.Index();
-            TileCapture sailing = new TileCapture(client, "sailing:", false, false, tiles);
-            sailing.quads = true;
-            hold("com.duckblade.osrs.sailing.SailingPlugin",
-                o -> SAILING_OVERLAYS.contains(o.getClass().getSimpleName()) && o.getClass().getName().startsWith("com.duckblade.osrs.sailing."),
-                sailing).stillShown = o -> sailingStillShown(o.getClass().getSimpleName());
-            hold(AggroAreaSource.PLUGIN, o -> o.getClass().getName().equals(AggroAreaSource.OVERLAY), aggroArea);
-            SourcePlugin rooftops = null;
-            for (String name : CAPTURED)
-            {
-                // Quest Helper's and Port Tasks' lines may end anywhere on the ground, not only at tile centres.
-                boolean groundLines = name.equals("Quest Helper") || name.equals("Port Tasks");
-                TileCapture capture = new TileCapture(client, name.toLowerCase().replaceAll("[^a-z]", "") + ":", groundLines, true, tiles);
-                SourcePlugin h = hold(name, o -> captures(name, o), capture);
-                switch (name)
-                {
-                    case "Rooftop Agility Improved":
-                        // Its highlights are drawn over the others, and the Agility plugin's marks for them are left to it.
-                        capture.markLayer = Marker.OBJECT + 1;
-                        capture.modelLayer = SceneShapeRenderer.HULL_LAYER + 1;
-                        rooftops = h;
-                        break;
-                    case "Agility": capture.yieldTo = rooftops; capture.range = 2350; break;
-                    // Plugins that draw their marks only near the player (Extend plugin ranges keeps them further).
-                    case "Blast Furnace": case "Pyramid Plunder": capture.range = 2350; break;
-                    case "Tile Packs": capture.range = 32 * 128; capture.squareRange = true; break;
-                    // No player tiles in PvP: there Player Indicators draws them itself, as it always would.
-                    case "Player Indicators":
-                        capture.usableWhen = () -> !WorldType.isPvpWorld(client.getWorldType()) && client.getVarbitValue(net.runelite.api.gameval.VarbitID.INSIDE_WILDERNESS) == 0;
-                        break;
-                    // Better NPC Highlight: the NPCs it highlights by name or as the Slayer task; NPCs only in its ID
-                    // lists stay its own drawing.
-                    case "Better NPC Highlight": capture.npcs = this::namedInBetterNpcHighlight; break;
-                    // Shortest Path's debug overlays (transports, collision map) are no path: then its overlay stays its own.
-                    case "Shortest Path":
-                        capture.usableWhen = () -> !"true".equals(configManager.getConfiguration("shortestpath", "drawTransports"))
-                            && !"true".equals(configManager.getConfiguration("shortestpath", "drawCollisionMap"));
-                        break;
-                    default: break;
-                }
-            }
-        }
         overlays.add(overlay);
         paths.startUp();
+        marking.startUp();
         for (Object o : subscribers()) { eventBus.register(o); }
     }
 
@@ -155,19 +81,13 @@ public class InWorldTileMarkersPlugin extends Plugin
         running = false;
         overlays.remove(overlay);
         for (Object o : subscribers()) { eventBus.unregister(o); }
+        marking.shutDown();
         paths.shutDown();
         externalMarks.clear();
         clientThread.invoke(() -> { if (!running) { reset(true); sources.clear(); } });
     }
 
-    private Object[] subscribers() { return new Object[]{paths, externalMarks}; }
-
-    private SourcePlugin hold(String plugin, Predicate<Overlay> match, SourcePlugin.Source... sources)
-    {
-        SourcePlugin h = new SourcePlugin(overlays, plugins, plugin, match, sources);
-        sourcePlugins.add(h);
-        return h;
-    }
+    private Object[] subscribers() { return new Object[]{paths, externalMarks, marking}; }
 
     private void reset() { reset(false); }
 
@@ -181,11 +101,7 @@ public class InWorldTileMarkersPlugin extends Plugin
         markers = Collections.emptyList();
         modelTargets = Collections.emptyList();
         hover = null;
-        if (groundPlugin != null) { groundPlugin.reset(); objectPlugin.reset(); }
-        for (SourcePlugin h : sourcePlugins) { h.reset(); }
     }
-
-
 
     /** Everything from the scene again (after a load or a change). */
     private void rebuild()
@@ -195,14 +111,6 @@ public class InWorldTileMarkersPlugin extends Plugin
         dirty = false;
     }
 
-    /** Whether In-World Tile Markers draws this overlay of the plugin with this name: one it draws in the world, but... */
-    static boolean captures(String name, Overlay o)
-    {
-        // ...of The Gauntlet its maze only, not the boss fight; of Quest Helper not its arrows, which point from the screen.
-        return SourcePlugin.inWorld(o) && (!name.equals("The Gauntlet") || o.getClass().getName().contains(".maze."))
-            && !(name.equals("Quest Helper") && o.getClass().getSimpleName().contains("Arrow"));
-    }
-
     @Subscribe public void onPostClientTick(PostClientTick event)
     {
         if (!running || client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null) { return; }
@@ -210,26 +118,12 @@ public class InWorldTileMarkersPlugin extends Plugin
         {
             // Not while the marks rest after a failure: the scene is read again when they are tried again.
             if (dirty && !failed()) { rebuild(); }
-            sources.groundEnabled = enabled(GroundMarkerPlugin.class);
-            sources.objectsEnabled = enabled(ObjectIndicatorsPlugin.class);
-            sources.npcsEnabled = enabled(NpcIndicatorsPlugin.class);
-            TileCapture.extendTo = config.extendRanges() ? MarkerSources.drawDistance(config) : 0;
-            TileCapture.scaleRound = config.scaleTimers();
-            // Replace the original overlays unless the scene route has actually failed. Without GPU
-            // In-World Tile Markers draws 2D itself; merely not having drawn a frame yet (start-up) is not a failure.
-            boolean drawing = !client.isGpu() || sceneActive();
-            // The integrations below add to these lists.
             List<Marker> tiles = sources.collect(pathTiles());
             List<ModelTarget> models = sources.modelTargets();
-            // Other plugins' marks: only while that plugin runs and the scene route works; otherwise its own overlay draws.
-            for (SourcePlugin h : sourcePlugins) { h.collect(sceneActive() && config.otherPlugins(), tiles, models); }
-            warnQuestHelperOutlines();
             // Marks other plugins sent through PluginMessage.
             externalMarks.collect(tiles, models);
             markers = tiles;
             modelTargets = models;
-            groundPlugin.update(config.ground() && config.replaceGround() && sources.validGround() && drawing);
-            objectPlugin.update(config.objectMarkers() && config.replaceObjectMarkers() && sources.validObjects() && drawing);
         }
         catch (RuntimeException ex)
         {
@@ -404,26 +298,6 @@ public class InWorldTileMarkersPlugin extends Plugin
         return stretched.width / (float) real.width;
     }
 
-    /** Whether Sailing itself would still show this overlay: its feature toggles, as their isEnabled. */
-    private boolean sailingStillShown(String overlay)
-    {
-        java.util.function.Predicate<String> on = key -> !"false".equals(configManager.getConfiguration("sailing", key));
-        switch (overlay)
-        {
-            case "RapidsOverlay": return on.test("highlightRapids");
-            case "LightningCloudsOverlay": return on.test("highlightLightningCloudStrikes");
-            case "LostCargoHighlighter": return on.test("barracudaHighlightLostCrates");
-            case "SalvagingHighlight": return on.test("salvagingHighlightActiveWrecks") || on.test("salvagingHighlightInactiveWrecks")
-                || "true".equals(configManager.getConfiguration("sailing", "salvagingHideHighLevelWrecks"));
-            case "TrueTileIndicator":
-            {
-                String mode = configManager.getConfiguration("sailing", "navigationTrueTileIndicator");
-                return mode != null && !"OFF".equals(mode);
-            }
-            default: return true;
-        }
-    }
-
     /** Walk here: remember the clicked tile for the predicted destination. */
     @Subscribe public void onMenuOptionClicked(MenuOptionClicked e)
     {
@@ -475,39 +349,6 @@ public class InWorldTileMarkersPlugin extends Plugin
             }
         });
     }
-    /**
-     * Better NPC Highlight's name lists (lower case, wildcards), read once per change of its settings, and per NPC name
-     * whether one matches (WildcardMatcher compiles a pattern per call).
-     */
-    private List<String> betterNpcNames;
-    private final java.util.Map<String, Boolean> betterNpcNamed = new java.util.HashMap<>();
-    @Inject private net.runelite.client.plugins.slayer.SlayerPluginService slayer;
-
-    private boolean namedInBetterNpcHighlight(NPC npc)
-    {
-        if (betterNpcNames == null)
-        {
-            betterNpcNamed.clear();
-            List<String> names = new ArrayList<>();
-            for (String style : new String[]{"tile", "trueTile", "swTile", "swTrueTile", "hull", "area", "outline", "clickbox"})
-            {
-                String list = configManager.getConfiguration("BetterNpcHighlight", style + "Names");
-                // Comma-separated; a comma in a name is escaped; an entry may end in ":preset".
-                for (String entry : list == null ? new String[0] : list.split("(?<!\\\\),"))
-                {
-                    String name = entry.replace("\\,", ",").trim().toLowerCase().split(":")[0];
-                    if (!name.isEmpty()) { names.add(name); }
-                }
-            }
-            betterNpcNames = names;
-        }
-        List<String> patterns = betterNpcNames;
-        String name = npc.getName();
-        return name != null && betterNpcNamed.computeIfAbsent(name, n -> patterns.stream()
-            .anyMatch(pattern -> net.runelite.client.util.WildcardMatcher.matches(pattern, n.toLowerCase())))
-            || slayer.getTargets().contains(npc);
-    }
-
     /** Whether 117 HD runs; checked on plugin changes, not every frame. */
     private Boolean hd;
 
@@ -517,14 +358,12 @@ public class InWorldTileMarkersPlugin extends Plugin
         return hd;
     }
 
+    /** 117 HD or the GPU plugin turned on or off: the scene is read again and the marks tried again. */
     @Subscribe public void onPluginChanged(PluginChanged e)
     {
         hd = null;
-        SourcePlugin.pluginsChanged();
         dirty = true;
         failedUntil = 0;
-        // Quest Helper turned on: its highlight styles are checked again for the notice.
-        if (e.isLoaded() && e.getPlugin().getClass().getName().equals(QUEST_HELPER)) { warnedQuestHelper = false; }
     }
     @Inject private net.runelite.client.chat.ChatMessageManager chatMessages;
     /**
@@ -552,21 +391,6 @@ public class InWorldTileMarkersPlugin extends Plugin
                 .append("In-World Tile Markers: ").append(net.runelite.client.chat.ChatColorType.NORMAL).append(text).build()).build());
     }
 
-    /** The Quest Helper notice is shown once after the plugin starts (or is installed), while logged in. */
-    private boolean warnedQuestHelper;
-    private static final String QUEST_HELPER = "com.questhelper.QuestHelperPlugin", QUEST_HELPER_GROUP = "questhelper";
-
-    /**
-     * Quest Helper's default outline style is drawn by RuneLite's outline renderer, past any overlay's graphics, so it
-     * stays 2D; its convex hull and click box styles do not. The player is told once, in the chat box.
-     */
-    /** Whether a core plugin is switched on, found in the plugin list. */
-    private boolean enabled(Class<? extends Plugin> type)
-    {
-        for (Plugin p : plugins.getPlugins()) { if (type.isInstance(p)) { return plugins.isPluginEnabled(p); } }
-        return false;
-    }
-
     /** Whether the plugin of this class runs. */
     private boolean active(String type)
     {
@@ -574,47 +398,25 @@ public class InWorldTileMarkersPlugin extends Plugin
         return false;
     }
 
-    private void warnQuestHelperOutlines()
-    {
-        if (warnedQuestHelper || config.ignoreQuestHelperWarning() || !sceneActive()) { return; }
-        // Checked once; turning Quest Helper on or changing its styles checks again (onPluginChanged, onConfigChanged).
-        warnedQuestHelper = true;
-        if (!active(QUEST_HELPER)) { return; }
-        List<String> outlined = new ArrayList<>();
-        // Unset means its default, OUTLINE.
-        String[][] styles = {{"highlightStyleNpcs", "NPCs"}, {"highlightStyleObjects", "objects"}, {"highlightStyleGroundItems", "ground items"}};
-        for (String[] style : styles)
-        {
-            String value = configManager.getConfiguration(QUEST_HELPER_GROUP, style[0]);
-            if (value == null || "OUTLINE".equals(value)) { outlined.add(style[1]); }
-        }
-        if (outlined.isEmpty()) { return; }
-        notice("Quest Helper highlights " + String.join(", ", outlined) + " as outlines, which cannot be drawn sharp."
-            + " Set its highlight style to \"Convex hull\" (NPCs) or \"Click box\" (objects, ground items) for sharp highlights."
-            + " Turn this notice off with \"Ignore Quest Helper notice\" in In-World Tile Markers' settings.");
-    }
-
     @Subscribe public void onConfigChanged(ConfigChanged e)
     {
-        // A plugin may add or remove an overlay for a setting (Sailing): its overlays are looked for again.
-        SourcePlugin.pluginsChanged();
         if ("hd".equals(e.getGroup()) && "enableShadowTransparency".equals(e.getKey())) { warnedShadowTransparency = false; return; }
-        if (QUEST_HELPER_GROUP.equals(e.getGroup()) && e.getKey().startsWith("highlightStyle")) { warnedQuestHelper = false; return; }
-        // Settings change on the thread of the settings panel; what the client thread uses is reset there.
-        if ("BetterNpcHighlight".equals(e.getGroup())) { clientThread.invokeLater(() -> { betterNpcNames = null; }); return; }
-        String group = e.getGroup();
-        // In-World Tile Markers' own settings are read every tick or frame: no rebuild (dragging a colour picker sent one
-        // per step), only another try after a failure.
-        if (group.equals(InWorldTileMarkersConfig.GROUP)) { failedUntil = 0; return; }
-        // Marks and settings of the plugins In-World Tile Markers reads: rebuild when they change.
-        if (group.equals(ObjectMarkerSource.GROUP)) { clientThread.invokeLater(objectMarkers::clearPoints); }
-        if (group.equals("groundMarker") || group.equals(ObjectMarkerSource.GROUP))
-        { dirty = true; failedUntil = 0; }
-        // NPC Indicators (a tag, Tag-All, its styles): only its NPCs are matched again, the shapes drawn so far are kept.
-        // A full rebuild per tag made the renderer start over, the stall of the first frames after a scene load each time.
-        if (group.equals(net.runelite.client.plugins.npchighlight.NpcIndicatorsConfig.GROUP))
+        if (!InWorldTileMarkersConfig.GROUP.equals(e.getGroup())) { return; }
+        // The settings are read every tick or frame: no rebuild (dragging a colour picker sent one per step), only
+        // another try after a failure.
+        failedUntil = 0;
+        String key = e.getKey();
+        // Marked tiles and objects: read again, on the client thread (settings change on the settings panel's).
+        if (key.startsWith(MarkerSources.TILES) || key.startsWith(ObjectMarkerSource.KEY))
         {
-            failedUntil = 0;
+            clientThread.invokeLater(() -> {
+                objectMarkers.clearPoints();
+                if (running && !dirty) { sources.reloadMarks(); }
+            });
+        }
+        // Tagged names: only the NPCs are matched again.
+        else if (key.equals("npcNames"))
+        {
             clientThread.invokeLater(() -> { if (running && !dirty) { sources.refreshNpcs(); } });
         }
     }
@@ -636,14 +438,8 @@ public class InWorldTileMarkersPlugin extends Plugin
     List<ModelTarget> modelTargets() { return modelTargets; }
     boolean hoverIn2d() { return config.hoveredTileIn2d(); }
 
-
-
     /** The hovered tile for the overlay: read at overlay time when drawn in 2D, for zero delay. */
     Marker hover() { return config.hoveredTileIn2d() || !client.isGpu() || failed() ? sources.hover() : hover; }
-    boolean replacedGround() { return groundPlugin != null && groundPlugin.drawing(); }
-
-    /** Runs the paused overlays of the other plugins once (IndicatorOverlay): their marks go to the scene, the rest is drawn on g. */
-    void renderCaptured(java.awt.Graphics2D g) { for (SourcePlugin h : sourcePlugins) { h.render(g); } }
 
     /** The scene route works: GPU on, no rendering error, carrier models available. */
     boolean sceneActive() { return client.isGpu() && !failed() && !sceneUnavailable; }

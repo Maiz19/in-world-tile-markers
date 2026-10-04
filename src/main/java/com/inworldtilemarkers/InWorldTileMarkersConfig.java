@@ -24,7 +24,8 @@
  */
 /*
  * The Tile Indicators options reuse the option names and descriptions of RuneLite's
- * TileIndicatorsConfig (copyright (c) 2018 Tomas Slusny, BSD 2-Clause; META-INF/LICENSE-runelite); the path
+ * TileIndicatorsConfig (copyright (c) 2018 Tomas Slusny, BSD 2-Clause; META-INF/LICENSE-runelite), the marking options
+ * option names of its GroundMarkerConfig, ObjectIndicatorsConfig and NpcIndicatorsConfig (same license); the path
  * options those of Path Marker's PathMarkerConfig (copyright (c) 2022 GeChallengeM, BSD 2-Clause;
  * META-INF/LICENSE-path-marker). See THIRD_PARTY_NOTICES.md.
  */
@@ -34,7 +35,7 @@ import java.awt.Color;
 import net.runelite.client.config.*;
 
 /**
- * Options follow the plugins In-World Tile Markers adapts (Tile Indicators, NPC Indicators,
+ * Options follow the plugins In-World Tile Markers adapts (Tile Indicators, Ground Markers, NPC Indicators,
  * Object Markers, Path Marker) with the same option names where the feature exists. Defaults use the
  * original development preset. Border widths are in screen pixels, like the originals.
  */
@@ -45,7 +46,7 @@ public interface InWorldTileMarkersConfig extends Config
 
     @ConfigSection(name = "General", description = "General options", position = 0)
     String generalSection = "general";
-    @ConfigSection(name = "Ground Markers", description = "Saved Ground Markers; colors, border width and fill come from the Ground Markers plugin", position = 1)
+    @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, Mark", position = 1)
     String groundSection = "ground";
     @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 2)
     String destinationSection = "destinationTile";
@@ -53,7 +54,9 @@ public interface InWorldTileMarkersConfig extends Config
     String hoveredSection = "hoveredTile";
     @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 4)
     String currentSection = "currentTile";
-    @ConfigSection(name = "Objects", description = "Objects marked with Object Markers; colors, styles and border width come from Object Markers", position = 6)
+    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 5)
+    String npcSection = "npcs";
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 6)
     String objectSection = "objects";
     @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 7)
     String activePathSection = "activePath";
@@ -76,25 +79,48 @@ public interface InWorldTileMarkersConfig extends Config
     @ConfigItem(keyName = "predictWalk", name = "Predict walk target", description = "After Walk here, show the clicked tile as destination and a predicted path, also when you click beyond the loaded area (such as 117 HD's extended terrain). Beyond it, heights and walls are unknown: the path is a straight line.", position = 2, section = generalSection)
     default boolean predictWalk() { return true; }
 
-    @ConfigItem(keyName = "otherPlugins", name = "Other plugins' marks", description = "Also draw the tile highlights, clickboxes and hulls of other plugins you use in the scene (see the guide). Off: they draw them themselves", position = 5, section = generalSection)
-    default boolean otherPlugins() { return false; }
+    // Tile markers
 
-    @ConfigItem(keyName = "extendRanges", name = "Extend plugin ranges", description = "Keep drawing the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder: about 18 tiles; Tile Packs: 32; NPC Aggression Timer: 20) up to the draw distance, once you have seen them", position = 6, section = generalSection)
-    default boolean extendRanges() { return false; }
+    @ConfigItem(keyName = "markTiles", name = "Mark option", description = "Shift + right-click a tile: Mark, Unmark and Label", position = 0, section = groundSection)
+    default boolean markTiles() { return true; }
 
-    @ConfigItem(keyName = "scaleTimers", name = "Timers scale with the world", description = "Other plugins' timer pies keep their size next to their rock as you zoom. Off: the same size on screen at every zoom, as their plugin draws them", position = 7, section = generalSection)
-    default boolean scaleTimers() { return true; }
+    @Alpha
+    @ConfigItem(keyName = "tileColor", name = "Tile color", description = "Color of marked tiles. Imported tiles keep their own color", position = 1, section = groundSection)
+    default Color tileColor() { return Color.YELLOW; }
 
-    @ConfigItem(keyName = "ignoreQuestHelperWarning", name = "Ignore Quest Helper notice", description = "Don't show the chat notice about Quest Helper's outline styles, which stay 2D", position = 8, section = generalSection)
-    default boolean ignoreQuestHelperWarning() { return false; }
+    @Range(max = 255)
+    @ConfigItem(keyName = "tileFillOpacity", name = "Fill opacity", description = "Opacity of the tiles' fill", position = 2, section = groundSection)
+    default int tileFillOpacity() { return 50; }
 
-    // Ground Markers
+    @ConfigItem(keyName = "tileBorderWidth", name = "Border width", description = "Width of the tiles' border", position = 3, section = groundSection)
+    default double tileBorderWidth() { return 2; }
 
-    @ConfigItem(keyName = "ground", name = "Ground Markers", description = "Draw saved Ground Markers, including imported tiles", position = 0, section = groundSection)
-    default boolean ground() { return true; }
+    @ConfigItem(keyName = "showImportExport", name = "Import/export options", description = "Import and Export on the world map orb's right-click menu, in Ground Markers' format: its export can be imported here", position = 4, section = groundSection)
+    default boolean showImportExport() { return true; }
 
-    @ConfigItem(keyName = "replaceGround", name = "Instead of Ground Markers' lines", description = "Ground Markers' own lines pause while these are drawn; its labels and minimap stay", position = 1, section = groundSection)
-    default boolean replaceGround() { return true; }
+    // NPCs
+
+    @ConfigItem(keyName = "tagNpcs", name = "Tag option", description = "Shift + right-click an NPC: Tag-All or Un-tag-All, every NPC with its name", position = 0, section = npcSection)
+    default boolean tagNpcs() { return true; }
+
+    @ConfigItem(keyName = "npcNames", name = "NPC names", description = "Names of the NPCs to highlight, separated by commas; * matches any text", position = 1, section = npcSection)
+    default String npcNames() { return ""; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcColor", name = "Highlight color", description = "Color of tagged NPCs", position = 2, section = npcSection)
+    default Color npcColor() { return Color.CYAN; }
+
+    @ConfigItem(keyName = "npcHull", name = "Highlight hull", description = "Highlight the NPC's hull", position = 3, section = npcSection)
+    default boolean npcHull() { return true; }
+
+    @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 4, section = npcSection)
+    default boolean npcTile() { return false; }
+
+    @ConfigItem(keyName = "npcOutline", name = "Highlight outline", description = "Highlight the NPC's outline", position = 5, section = npcSection)
+    default boolean npcOutline() { return false; }
+
+    @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 6, section = npcSection)
+    default double npcBorderWidth() { return 2; }
 
     // Destination tile
 
@@ -198,11 +224,27 @@ public interface InWorldTileMarkersConfig extends Config
 
     // Objects
 
-    @ConfigItem(keyName = "objectMarkers", name = "Object Markers", description = "Draw objects marked with Object Markers (Shift-right-click, Mark object), with their own colors and styles", position = 0, section = objectSection)
-    default boolean objectMarkers() { return true; }
+    @ConfigItem(keyName = "markObjects", name = "Mark object option", description = "Shift + right-click an object: Mark object or Unmark object", position = 0, section = objectSection)
+    default boolean markObjects() { return true; }
 
-    @ConfigItem(keyName = "replaceObjectMarkers", name = "Instead of Object Markers' drawing", description = "Object Markers' own drawing pauses while these are drawn", position = 1, section = objectSection)
-    default boolean replaceObjectMarkers() { return true; }
+    @Alpha
+    @ConfigItem(keyName = "objectColor", name = "Marker color", description = "Color of marked objects", position = 1, section = objectSection)
+    default Color objectColor() { return Color.YELLOW; }
+
+    @ConfigItem(keyName = "objectHull", name = "Highlight hull", description = "Highlight the object's hull", position = 2, section = objectSection)
+    default boolean objectHull() { return true; }
+
+    @ConfigItem(keyName = "objectOutline", name = "Highlight outline", description = "Highlight the object's outline", position = 3, section = objectSection)
+    default boolean objectOutline() { return false; }
+
+    @ConfigItem(keyName = "objectClickbox", name = "Highlight clickbox", description = "Highlight the object's clickbox", position = 4, section = objectSection)
+    default boolean objectClickbox() { return false; }
+
+    @ConfigItem(keyName = "objectTile", name = "Highlight tile", description = "Highlight the tiles the object stands on", position = 5, section = objectSection)
+    default boolean objectTile() { return false; }
+
+    @ConfigItem(keyName = "objectBorderWidth", name = "Border width", description = "Width of the highlight border", position = 6, section = objectSection)
+    default double objectBorderWidth() { return 2; }
 
     // Path Marker, active path
 

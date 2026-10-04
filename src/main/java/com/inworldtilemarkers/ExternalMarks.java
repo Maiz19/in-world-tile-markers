@@ -114,7 +114,7 @@ final class ExternalMarks
                     local = local.plus((size - 1) * 64, (size - 1) * 64);
                     Object label = t.get("label");
                     Marker m = new Marker("ext:" + owner.getKey() + ":" + n++, local, instance.getPlane(), size, size, color,
-                        color(t.get("fill"), DEFAULT_FILL), number(t.get("width"), 2), label instanceof String ? (String) label : null, false);
+                        color(t.get("fill"), DEFAULT_FILL), number(t.get("width"), 2), label instanceof String ? (String) label : null);
                     m.layer = Marker.EXTERNAL;
                     markerOut.add(m);
                 }
@@ -139,7 +139,7 @@ final class ExternalMarks
                         : LocalPoint.fromWorld(wv, npc.getWorldLocation());
                     if (local == null) { continue; }
                     if ("truetile".equals(style)) { local = local.plus((size - 1) * 64, (size - 1) * 64); }
-                    Marker m = new Marker(key, local, wv.getPlane(), size, size, color, fill, width, null, false);
+                    Marker m = new Marker(key, local, wv.getPlane(), size, size, color, fill, width, null);
                     m.layer = Marker.EXTERNAL;
                     markerOut.add(m);
                 }

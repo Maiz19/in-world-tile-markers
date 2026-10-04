@@ -23,8 +23,6 @@ final class ModelTarget
     final boolean clickbox;
     /** Outline: the model's silhouette, with the line outside it, instead of the convex hull. */
     final boolean outline;
-    /** Depth layer: SceneShapeRenderer.HULL_LAYER, or above it for a plugin's highlight drawn over the others. */
-    int layer = SceneShapeRenderer.HULL_LAYER;
     private final Supplier<Shape> fallback;
 
     private ModelTarget(String key, NPC npc, TileObject object, Renderable renderable, int offsetX, int offsetY,
@@ -40,7 +38,7 @@ final class ModelTarget
     static ModelTarget npc(String key, NPC npc, Color color, Color fill, double borderWidth)
     { return new ModelTarget(key, npc, null, null, 0, 0, color, fill, borderWidth, false, false, npc::getConvexHull); }
 
-    /** An NPC's clickbox; without a scene route RuneLite's own, as Better NPC Highlight draws it. */
+    /** An NPC's clickbox; without a scene route RuneLite's own (Perspective.getClickbox). */
     static ModelTarget npcClickbox(String key, NPC npc, Color color, Color fill, double borderWidth, Client client)
     { return new ModelTarget(key, npc, null, null, 0, 0, color, fill, borderWidth, true, false, () -> clickbox(client, npc)); }
 
@@ -117,15 +115,6 @@ final class ModelTarget
     static int offsetX(TileObject object) { return object instanceof DecorativeObject ? ((DecorativeObject) object).getXOffset() : 0; }
 
     static int offsetY(TileObject object) { return object instanceof DecorativeObject ? ((DecorativeObject) object).getYOffset() : 0; }
-
-    /** The convex hull of the object's (first) model, as RuneLite's getConvexHull. */
-    static Shape hull(TileObject object)
-    {
-        if (object instanceof GameObject) { return ((GameObject) object).getConvexHull(); }
-        if (object instanceof WallObject) { return ((WallObject) object).getConvexHull(); }
-        if (object instanceof DecorativeObject) { return ((DecorativeObject) object).getConvexHull(); }
-        return object instanceof GroundObject ? ((GroundObject) object).getConvexHull() : null;
-    }
 
     /** The object's (first) model. */
     static Renderable renderable(TileObject object)

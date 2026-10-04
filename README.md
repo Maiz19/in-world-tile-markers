@@ -12,6 +12,6 @@ Left: RuneLite's normal markers in Stretched Mode. Right: In-World Tile Markers.
 | ![Tiles before](docs/images/tiles-before.png) | ![Tiles after](docs/images/tiles-after.png) |
 | ![Clickbox before](docs/images/clickbox-before.png) | ![Clickbox after](docs/images/clickbox-after.png) |
 
-It draws your Ground Markers, Object Markers and NPC Indicators marks, its own tile indicators and walking paths, and the world highlights of a number of other plugins. While it draws another plugin's highlights, that plugin's own drawing of them is paused. Other plugins' settings are only read, never changed.
+Mark tiles, objects and NPCs with Shift + right-click, as with RuneLite's Ground Markers, Object Markers and NPC Indicators. Ground Markers' export can be imported from the world map orb. It also draws your destination, hovered and current tile and the path you walk, and other plugins can send it marks to draw.
 
 [Guide](docs/GUIDE.md) · [Credits](THIRD_PARTY_NOTICES.md) · [License](LICENSE)

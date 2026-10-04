@@ -4,33 +4,37 @@
 
 Normal overlay lines are drawn on top of the game image, so Stretched Mode scales them up and they turn blurry. In-World Tile Markers builds its markers from flat shapes inside the game scene instead. With GPU or an HD renderer they are drawn at the scene's own resolution, with border widths kept in screen pixels. Without GPU, and for anything that cannot go into the scene, the normal 2D drawing is used.
 
+## Marking
+
+Hold Shift and right-click:
+
+- **a tile:** Mark or Unmark, and Label on a marked tile.
+- **an object:** Mark object or Unmark object.
+- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. Names can also be typed into **NPC names**, separated by commas; `*` matches any text (`goblin*`).
+
+Colour, fill, border width and highlight style (hull, outline, clickbox, tile) are set per kind in the settings. Tiles imported from Ground Markers keep their own colour.
+
+These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show; turn them off once your marks are moved over.
+
+### Moving your Ground Markers over
+
+1. Right-click the world map orb and choose **Export Ground Markers**. Ground Markers copies the tiles of the area you are in.
+2. Right-click the world map orb and choose **Import In-World Tile Markers**.
+
+**Export In-World Tile Markers** copies your tiles in the same format, for Ground Markers or to share. **Import/export options** turns both off.
+
+Object Markers and NPC Indicators have no export: mark those again, or type the names into **NPC names**.
+
 ## What it draws
 
-**Your own markers**
-
-- **Ground Markers:** your saved marks, including imported tiles, in Ground Markers' colours, border width and fill. Labels and the minimap stay with Ground Markers.
-- **Object Markers:** every marked object in its own style (hull, clickbox, tile or outline) and colours.
-- **NPC Indicators:** its tagged NPCs and NPC list, with its per-NPC colours and styles.
+- **Your marks:** tiles with their labels, objects and tagged NPCs.
 - **Tile indicators:** the destination, hovered and true tile, each with corners-only, fade-out and colour options.
 - **Paths:** the path you are walking and the path to the hovered tile, in the game world and on the minimap. Running tiles you only pass get their own colour. After a click beyond the loaded area (an HD renderer's extended view), the destination and a predicted path are shown too.
-
-**Other plugins' marks**
-
-The tile highlights, clickboxes, hulls, path lines and timer pies these plugins draw in the world are drawn in the scene as well, in their own colours and by their own settings:
-
-- RuneLite: Agility, Blast Furnace, Blast Mine, Cannon, Fishing, Ground Items, Herbiboar, Implings, Kourend Library, Mage Training Arena, Mining, Motherlode Mine, NPC Aggression Timer, Party, Pest Control, Player Indicators (not in PvP worlds or the Wilderness), Pyramid Plunder, Runecraft and Woodcutting.
-- Plugin Hub: Advanced Mining, Better NPC Highlight (the NPCs in its name lists and your Slayer task), Clue Details, Game Tick Information, Mahogany Homes, Motherlode Mine Improved, Port Tasks, Quest Helper, Remaining Amethyst, Rogues' Den, Rooftop Agility Improved, Sailing, Shortest Path, Star Info, Stealing Artefacts, Stop Misclicking Tiles, The Gauntlet and Tile Packs.
-
-While In-World Tile Markers draws a plugin's marks, that plugin's own drawing of those marks pauses, so nothing is drawn twice. Its text, icons, timers, menus, panels and settings keep working, and its own drawing returns as soon as In-World Tile Markers stops. This is off by default: turn on **Other plugins' marks** to use it.
-
-**Extend plugin ranges** keeps the marks of plugins that only draw near you (Agility, Blast Furnace, Pyramid Plunder, Tile Packs, NPC Aggression Timer) up to the draw distance, once you have seen them.
-
-**Timers scale with the world** (on by default) keeps other plugins' timer pies at their size next to their rock as you zoom. Off, they keep the same size on screen, as their plugin draws them.
+- **Marks other plugins send**, see below.
 
 ## Limits
 
 - The scene drawing needs GPU or an HD renderer.
-- Outlines other plugins draw with RuneLite's outline renderer (for example Quest Helper's and Better NPC Highlight's outline styles) stay 2D: that renderer draws straight into the image. Their hull and clickbox styles are drawn in the scene.
 - More than 1,500 tiles, or more than 256 hulls, clickboxes and outlines, fall back to 2D.
 - A floor that is an object rather than terrain (some docks) can cover tiles when **Through walls** is off.
 - With an HD renderer's "Shadow transparency" on, marks drawn through walls cast shadows that move with the camera. In-World Tile Markers says so once in the chat box.

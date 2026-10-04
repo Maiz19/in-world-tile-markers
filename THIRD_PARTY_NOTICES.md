@@ -2,17 +2,17 @@
 
 ## RuneLite
 
-- Source: https://github.com/runelite/runelite (tag `runelite-parent-1.12.39`)
-- License: BSD 2-Clause, copyright (c) 2017-2018 Adam, (c) 2018 Tomas Slusny, TheLonelyDev, James Swindle and Woox, (c) 2019 Abex, and the RuneLite contributors. Full text in `src/main/resources/META-INF/LICENSE-runelite`, included in the JAR.
+- Source: https://github.com/runelite/runelite (tag `runelite-parent-1.12.39`; `Marking.java` tag `runelite-parent-1.13.1`)
+- License: BSD 2-Clause, copyright (c) 2017-2018 and 2021 Adam, (c) 2018 Tomas Slusny, TheLonelyDev and James Swindle, (c) 2019 Abex, and the RuneLite contributors. Full text in `src/main/resources/META-INF/LICENSE-runelite`, included in the JAR.
 
 These files adapt parts of RuneLite; each names its origin in its header:
 
 - `FloatClickbox.java`: the clickbox of `Perspective.getClickbox`, `RectangleUnion.union` and `SimplePolygon.intersectWithConvex`, computed in floats.
 - `ModelShapes.java` and `Terrain.java`: the projection of `Perspective.localToCanvasGpu` / `modelToCanvas`, and the height interpolation of `Perspective.getTileHeight`.
-- `MarkerSources.java`: Ground Markers' point loading and NPC Indicators' NPC selection, read from their saved settings.
-- `ObjectMarkerSource.java`: Object Markers' matching and display rules, read from its saved settings.
-- `AggroAreaSource.java`: the display rules of NPC Aggression Timer's area lines.
-- `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators.
+- `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators, and Ground Markers' import and export (its saved tile format).
+- `MarkerSources.java`: Ground Markers' point loading and NPC Indicators' name matching, for In-World Tile Markers' own saved marks.
+- `ObjectMarkerSource.java`: Object Markers' matching and display rules, for In-World Tile Markers' own saved marks.
+- `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators, and option names of Ground Markers, Object Markers and NPC Indicators.
 
 ## Path Marker
 
