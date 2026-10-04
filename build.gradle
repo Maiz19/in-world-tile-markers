@@ -1,0 +1,12 @@
+plugins { id 'java' }
+repositories {
+    maven { url = 'https://repo.runelite.net'; content { includeGroupByRegex('net\\.runelite.*') } }
+    mavenCentral()
+}
+def runeLiteVersion = 'latest.release'
+dependencies {
+    compileOnly "net.runelite:client:${runeLiteVersion}"
+}
+group = 'com.inworldtilemarkers'
+version = '1.0.0'
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release.set(11) }
