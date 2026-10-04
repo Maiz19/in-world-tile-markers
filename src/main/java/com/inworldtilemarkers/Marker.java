@@ -14,7 +14,7 @@ final class Marker
      * in this order). NPC highlights at the bottom, paths and other plugins' tiles above them, then your own marks,
      * and your tile indicators on top. Hulls, clickboxes and outlines use SceneShapeRenderer.HULL_LAYER.
      */
-    /** Tagged NPCs' tiles. */
+    /** Tagged NPCs' tile styles: tile, true tile, south-west tile, south-west true tile (+0..3). */
     static final int NPC_TILE = 1;
     static final int PATH_HOVER = 6, PATH_ACTIVE = 7;
     /** Tiles other plugins send (ExternalMarks): above Path Marker's path. */

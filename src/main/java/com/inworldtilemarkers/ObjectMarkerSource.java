@@ -36,6 +36,7 @@ package com.inworldtilemarkers;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
+import com.google.gson.annotations.SerializedName;
 import java.awt.Color;
 import java.util.*;
 import javax.inject.Inject;
@@ -65,30 +66,46 @@ final class ObjectMarkerSource
         this.client = client; this.configs = configs; this.gson = gson; this.config = config;
     }
 
-    /** A marked object in the scene. */
+    /** A marked object in the scene, with its own colors and styles (flags; 0 for the options'). */
     static final class Marked
     {
         final TileObject object;
         final ObjectComposition composition;
         final String name;
+        final Color borderColor, fillColor;
+        final int flags;
 
-        Marked(TileObject object, ObjectComposition composition, String name)
+        Marked(TileObject object, ObjectComposition composition, ObjectPoint p)
         {
-            this.object = object; this.composition = composition; this.name = name;
+            this.object = object; this.composition = composition; name = p.name; borderColor = p.borderColor; fillColor = p.fillColor;
+            flags = (p.hull == Boolean.TRUE ? HF_HULL : 0) | (p.outline == Boolean.TRUE ? HF_OUTLINE : 0)
+                | (p.clickbox == Boolean.TRUE ? HF_CLICKBOX : 0) | (p.tile == Boolean.TRUE ? HF_TILE : 0);
         }
     }
 
-    /** A marked object as saved: the object on this tile, and its name. */
+    /**
+     * A marked object as saved, in Object Markers' format: the object on this tile, its name, and its own colors and
+     * styles (null: the options').
+     */
     static final class ObjectPoint
     {
-        final int id;
-        final String name;
-        final int regionX, regionY, z;
+        int id;
+        String name;
+        int regionX, regionY, z;
+        @SerializedName("color")
+        Color borderColor;
+        Color fillColor;
+        Boolean hull, outline, clickbox, tile;
 
         ObjectPoint(int id, String name, int regionX, int regionY, int z)
         {
             this.id = id; this.name = name; this.regionX = regionX; this.regionY = regionY; this.z = z;
         }
+
+        boolean same(ObjectPoint o) { return id == o.id && regionX == o.regionX && regionY == o.regionY && z == o.z; }
+
+        /** Whether it has a color or style of its own. */
+        boolean hasLook() { return borderColor != null || fillColor != null || hull != null || outline != null || clickbox != null || tile != null; }
     }
 
     /** The marked objects; their saved points stay parsed (per region) until they change. */
@@ -148,7 +165,7 @@ final class ObjectMarkerSource
                 && worldPoint.getPlane() == p.z && p.id == object.getId())
             {
                 remove(object);
-                objects.add(new Marked(object, composition, p.name));
+                objects.add(new Marked(object, composition, p));
                 break;
             }
         }
@@ -157,10 +174,28 @@ final class ObjectMarkerSource
     void remove(TileObject object) { objects.removeIf(o -> o.object == object); }
 
     /** Whether this object is marked, as found in the scene. */
-    boolean marked(TileObject object)
+    boolean marked(TileObject object) { return find(object) != null; }
+
+    /** The mark of this object as found in the scene, or null. */
+    Marked find(TileObject object)
     {
-        for (Marked m : objects) { if (m.object == object) { return true; } }
-        return false;
+        for (Marked m : objects) { if (m.object == object) { return m; } }
+        return null;
+    }
+
+    /** The colors in use in these regions' marks (up to five), for the color menus. */
+    List<Color> usedColors(int[] regions, boolean fill)
+    {
+        List<Color> colors = new ArrayList<>();
+        for (int region : regions == null ? new int[0] : regions)
+        {
+            for (ObjectPoint p : points(region))
+            {
+                Color c = fill ? p.fillColor : p.borderColor;
+                if (c != null && !colors.contains(c) && colors.size() < 5) { colors.add(c); }
+            }
+        }
+        return colors;
     }
 
     void removeWorldView(WorldView wv) { objects.removeIf(o -> o.object.getWorldView() == wv); }
@@ -170,12 +205,8 @@ final class ObjectMarkerSource
     {
         if (objects.isEmpty()) { return Collections.emptyList(); }
         WorldView top = client.getTopLevelWorldView();
-        int flags = (config.objectHull() ? HF_HULL : 0) | (config.objectOutline() ? HF_OUTLINE : 0)
+        int defaultFlags = (config.objectHull() ? HF_HULL : 0) | (config.objectOutline() ? HF_OUTLINE : 0)
             | (config.objectClickbox() ? HF_CLICKBOX : 0) | (config.objectTile() ? HF_TILE : 0);
-        Color border = config.objectColor();
-        // The hull's fill as Object Markers' default (a=50); clickbox and tile use the border color at a/12.
-        Color hullFill = new Color(0, 0, 0, 50);
-        Color otherFill = new Color(border.getRed(), border.getGreen(), border.getBlue(), border.getAlpha() / 12);
         List<Resolved> result = new ArrayList<>();
         for (Marked m : objects)
         {
@@ -191,7 +222,12 @@ final class ObjectMarkerSource
                 if (composition == null || Strings.isNullOrEmpty(composition.getName())
                     || "null".equals(composition.getName()) || !composition.getName().equals(m.name)) { continue; }
             }
-            result.add(new Resolved(m.object, flags, border, hullFill, otherFill, config.objectBorderWidth()));
+            Color border = m.borderColor != null ? m.borderColor : config.objectColor();
+            Color fill = m.fillColor != null ? m.fillColor : config.objectFillColor();
+            // Without a fill the hull's is Object Markers' default (a=50); clickbox and tile use the border color at a/12.
+            Color hullFill = fill != null ? fill : new Color(0, 0, 0, 50);
+            Color otherFill = fill != null ? fill : new Color(border.getRed(), border.getGreen(), border.getBlue(), border.getAlpha() / 12);
+            result.add(new Resolved(m.object, m.flags != 0 ? m.flags : defaultFlags, border, hullFill, otherFill, config.objectBorderWidth()));
         }
         return result;
     }

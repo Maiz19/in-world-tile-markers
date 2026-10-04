@@ -27,23 +27,28 @@
  */
 /*
  * The menu options and what they save follow RuneLite's Ground Markers (GroundMarkerPlugin.onMenuEntryAdded, markTile,
- * labelTile, and GroundMarkerSharingManager's import and export), Object Markers (ObjectIndicatorsPlugin.onMenuEntryAdded,
- * markObject, findTileObject) and NPC Indicators (NpcIndicatorsPlugin.onMenuEntryAdded, tag) of
+ * labelTile, colorTile, and GroundMarkerSharingManager's import, export and clear), Object Markers
+ * (ObjectIndicatorsPlugin.onMenuEntryAdded, markObject, findTileObject, its color and style menus) and NPC Indicators
+ * (NpcIndicatorsPlugin.onMenuEntryAdded, tag, its color and style menus) of
  * https://github.com/runelite/runelite, tag runelite-parent-1.13.1, BSD 2-Clause License; see META-INF/LICENSE-runelite
  * and THIRD_PARTY_NOTICES.md.
- * Changes for In-World Tile Markers: saved in its own settings, marks without a color of their own (all but imported
- * tiles) follow the color options, and the marks those plugins saved can be copied (their settings are only read).
+ * Changes for In-World Tile Markers: saved in its own settings, NPC colors and styles per name instead of per NPC id,
+ * marks without a color of their own follow the color options, and the marks and options those plugins saved can be
+ * copied (their settings are only read).
  */
 package com.inworldtilemarkers;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
+import java.awt.Color;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.util.*;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import javax.swing.SwingUtilities;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameStateChanged;
@@ -59,6 +64,11 @@ import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.game.chatbox.ChatboxPanelManager;
 import net.runelite.client.menus.MenuManager;
 import net.runelite.client.menus.WidgetMenuOption;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.ui.components.colorpicker.ColorPickerManager;
+import net.runelite.client.ui.components.colorpicker.RuneliteColorPicker;
+import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
 
@@ -78,10 +88,15 @@ final class Marking
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
     private static final WidgetMenuOption SYNC = new WidgetMenuOption("Sync", "In-World Tile Markers",
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
-    /** Set in a profile once the other plugins' marks were copied there. */
-    static final String COPIED = "copiedOtherMarks";
+    private static final WidgetMenuOption CLEAR = new WidgetMenuOption("Clear", "In-World Tile Markers",
+        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    /** The colors offered in the color menus after those in use, as RuneLite's marking plugins. */
+    private static final Color[] DEFAULT_COLORS = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA};
+    /** Set in a profile once the other plugins' marks and options were taken over there. */
+    static final String COPIED = "tookOverOtherPlugins";
     /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
-    private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators";
+    private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators",
+        TILE_INDICATORS = "tileindicators";
 
     private final Client client;
     private final ClientThread clientThread;
@@ -93,13 +108,17 @@ final class Marking
     private final ChatboxPanelManager chatbox;
     private final ChatMessageManager chat;
     private final Gson gson;
+    private final ColorPickerManager colorPickers;
+    private final PluginManager plugins;
 
     @Inject
     Marking(Client client, ClientThread clientThread, ConfigManager configs, InWorldTileMarkersConfig config, MarkerSources sources,
-        ObjectMarkerSource objects, MenuManager menus, ChatboxPanelManager chatbox, ChatMessageManager chat, Gson gson)
+        ObjectMarkerSource objects, MenuManager menus, ChatboxPanelManager chatbox, ChatMessageManager chat, Gson gson,
+        ColorPickerManager colorPickers, PluginManager plugins)
     {
         this.client = client; this.clientThread = clientThread; this.configs = configs; this.config = config; this.sources = sources;
         this.objects = objects; this.menus = menus; this.chatbox = chatbox; this.chat = chat; this.gson = gson;
+        this.colorPickers = colorPickers; this.plugins = plugins;
     }
 
     void startUp()
@@ -108,7 +127,10 @@ final class Marking
         clientThread.invokeLater(this::copyOnce);
     }
 
-    void shutDown() { menus.removeManagedCustomMenu(EXPORT); menus.removeManagedCustomMenu(IMPORT); menus.removeManagedCustomMenu(SYNC); }
+    void shutDown()
+    {
+        for (WidgetMenuOption option : new WidgetMenuOption[]{EXPORT, IMPORT, SYNC, CLEAR}) { menus.removeManagedCustomMenu(option); }
+    }
 
     private void importExportOptions()
     {
@@ -117,6 +139,7 @@ final class Marking
         menus.addManagedCustomMenu(EXPORT, e -> exportTiles());
         menus.addManagedCustomMenu(IMPORT, e -> promptImport());
         menus.addManagedCustomMenu(SYNC, e -> sync());
+        menus.addManagedCustomMenu(CLEAR, e -> promptClear());
     }
 
     @Subscribe
@@ -135,6 +158,8 @@ final class Marking
     @Subscribe
     public void onGameStateChanged(GameStateChanged e)
     {
+        // NPC names come from the game's cache, loaded by the login screen.
+        if (e.getGameState() == GameState.LOGIN_SCREEN || e.getGameState() == GameState.LOGGED_IN) { copyOnce(); }
         if (e.getGameState() == GameState.LOGGED_IN && pendingNotice != null) { message(pendingNotice); pendingNotice = null; }
     }
 
@@ -164,7 +189,79 @@ final class Marking
         {
             client.getMenu().createMenuEntry(-2).setOption("Label").setTarget(TILE)
                 .setType(MenuAction.RUNELITE).onClick(e -> labelTile(marked));
+            tileColorMenu(marked);
         }
+    }
+
+    /** Ground Markers' Color menu: Reset all (the region's tiles), Pick, and the colors in use. */
+    private void tileColorMenu(MarkerSources.TilePoint marked)
+    {
+        Menu colors = client.getMenu().createMenuEntry(-3).setOption("Color").setTarget(TILE).setType(MenuAction.RUNELITE).createSubMenu();
+        List<MarkerSources.TilePoint> region = sources.tiles(marked.regionId);
+        if (region.size() > 1)
+        {
+            colors.createMenuEntry(-1).setOption("Reset all").setType(MenuAction.RUNELITE).onClick(e -> chatbox
+                .openTextMenuInput("Are you sure you want to reset the color of " + region.size() + " tiles?")
+                .option("Yes", () -> clientThread.invokeLater(() -> {
+                    List<MarkerSources.TilePoint> reset = new ArrayList<>();
+                    for (MarkerSources.TilePoint p : sources.tiles(marked.regionId))
+                    {
+                        reset.add(new MarkerSources.TilePoint(p.regionId, p.regionX, p.regionY, p.z, null, p.label));
+                    }
+                    saveTiles(marked.regionId, reset);
+                }))
+                .option("No", () -> { })
+                .build());
+        }
+        if (marked.color != null)
+        {
+            colors.createMenuEntry(-1).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> colorTile(marked, null));
+        }
+        colors.createMenuEntry(-1).setOption("Pick").setType(MenuAction.RUNELITE)
+            .onClick(e -> pick(marked.color != null ? marked.color : config.tileColor(), "Tile marker color", c -> colorTile(marked, c)));
+        List<Color> used = new ArrayList<>();
+        WorldView wv = client.getTopLevelWorldView();
+        for (int r : wv == null || wv.getMapRegions() == null ? new int[0] : wv.getMapRegions())
+        {
+            for (MarkerSources.TilePoint p : sources.tiles(r))
+            {
+                if (p.color != null && !p.color.equals(marked.color) && !used.contains(p.color) && used.size() < 5) { used.add(p.color); }
+            }
+        }
+        for (Color c : used)
+        {
+            colors.createMenuEntry(-1).setOption(ColorUtil.prependColorTag("Color", c)).setType(MenuAction.RUNELITE).onClick(e -> colorTile(marked, c));
+        }
+    }
+
+    private void colorTile(MarkerSources.TilePoint marked, Color color)
+    {
+        List<MarkerSources.TilePoint> points = new ArrayList<>(sources.tiles(marked.regionId));
+        points.removeIf(marked::same);
+        points.add(new MarkerSources.TilePoint(marked.regionId, marked.regionX, marked.regionY, marked.z, color, marked.label));
+        saveTiles(marked.regionId, points);
+    }
+
+    /** RuneLite's color picker; the chosen color is applied on the client thread. */
+    private void pick(Color current, String title, Consumer<Color> apply)
+    {
+        SwingUtilities.invokeLater(() -> {
+            RuneliteColorPicker picker = colorPickers.create(client, current, title, false);
+            picker.setOnClose(c -> clientThread.invokeLater(() -> apply.accept(c)));
+            picker.setVisible(true);
+        });
+    }
+
+    /** The colors in use (up to five), then defaults (at this alpha divisor) up to five, for the color menus. */
+    private static List<Color> withDefaults(List<Color> used, int alphaDivisor)
+    {
+        List<Color> colors = new ArrayList<>(used);
+        for (Color d : DEFAULT_COLORS)
+        {
+            Color c = ColorUtil.colorWithAlpha(d, d.getAlpha() / alphaDivisor);
+            if (colors.size() < 5 && !colors.contains(c)) { colors.add(c); }
+        }
+        return colors;
     }
 
     /** The marked tile at this point, or null. */
@@ -224,6 +321,29 @@ final class Marking
         message(points.size() + " marked tiles were copied to your clipboard.");
     }
 
+    /** Ground Markers' Clear: the marked tiles of the loaded area, after a confirmation. */
+    private void promptClear()
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        int[] regions = wv == null ? null : wv.getMapRegions();
+        if (regions == null) { return; }
+        int n = 0;
+        for (int region : regions) { n += sources.tiles(region).size(); }
+        if (n == 0)
+        {
+            message("You have no marked tiles to clear.");
+            return;
+        }
+        int cleared = n;
+        chatbox.openTextMenuInput("Are you sure you want to clear the<br>" + n + " marked tiles of this area?")
+            .option("Yes", () -> clientThread.invokeLater(() -> {
+                for (int region : regions) { saveTiles(region, Collections.emptyList()); }
+                message(cleared + (cleared == 1 ? " marked tile was cleared." : " marked tiles were cleared."));
+            }))
+            .option("No", () -> { })
+            .build();
+    }
+
     /** Tiles from the clipboard (Ground Markers' Export, or this one's), after a confirmation. */
     private void promptImport()
     {
@@ -277,17 +397,97 @@ final class Marking
 
     // Copying other plugins' marks
 
-    /** The first start in a profile: the marks of Ground Markers, Object Markers and NPC Indicators are copied over. */
+    /**
+     * RuneLite's marking plugins: settings group, name, plugin class. A first start takes over their marks and the
+     * options the player changed there; Tile Indicators' only while it is on.
+     */
+    private static final String[][] PLUGINS = {
+        {GROUND_MARKERS, "Ground Markers", "net.runelite.client.plugins.groundmarkers.GroundMarkerPlugin"},
+        {OBJECT_MARKERS, "Object Markers", "net.runelite.client.plugins.objectindicators.ObjectIndicatorsPlugin"},
+        {NPC_INDICATORS, "NPC Indicators", "net.runelite.client.plugins.npchighlight.NpcIndicatorsPlugin"},
+        {TILE_INDICATORS, "Tile Indicators", "net.runelite.client.plugins.tileindicators.TileIndicatorsPlugin"},
+    };
+
+    /** Their option and ours, per plugin settings group: the same option, where ours has a name of its own. */
+    private static final String[][] SETTINGS = {
+        {GROUND_MARKERS, "markerColor", "tileColor"}, {GROUND_MARKERS, "fillOpacity", "tileFillOpacity"},
+        {GROUND_MARKERS, "borderWidth", "tileBorderWidth"},
+        {OBJECT_MARKERS, "markerColor", "objectColor"}, {OBJECT_MARKERS, "fillColor", "objectFillColor"},
+        {OBJECT_MARKERS, "highlightHull", "objectHull"}, {OBJECT_MARKERS, "highlightOutline", "objectOutline"},
+        {OBJECT_MARKERS, "highlightClickbox", "objectClickbox"}, {OBJECT_MARKERS, "highlightTile", "objectTile"},
+        {OBJECT_MARKERS, "borderWidth", "objectBorderWidth"},
+        {NPC_INDICATORS, "npcColor", "npcColor"}, {NPC_INDICATORS, "fillColor", "npcFillColor"},
+        {NPC_INDICATORS, "highlightHull", "npcHull"}, {NPC_INDICATORS, "highlightTile", "npcTile"},
+        {NPC_INDICATORS, "highlightTrueTile", "npcTrueTile"}, {NPC_INDICATORS, "highlightSouthWestTile", "npcSouthWestTile"},
+        {NPC_INDICATORS, "highlightSouthWestTrueTile", "npcSouthWestTrueTile"}, {NPC_INDICATORS, "highlightOutline", "npcOutline"},
+        {NPC_INDICATORS, "borderWidth", "npcBorderWidth"}, {NPC_INDICATORS, "ignoreDeadNpcs", "npcIgnoreDead"},
+        {NPC_INDICATORS, "ignorePets", "npcIgnorePets"},
+        {TILE_INDICATORS, "highlightDestinationTile", null}, {TILE_INDICATORS, "highlightDestinationColor", null},
+        {TILE_INDICATORS, "destinationTileFillColor", null}, {TILE_INDICATORS, "destinationTileBorderWidth", null},
+        {TILE_INDICATORS, "highlightHoveredTile", null}, {TILE_INDICATORS, "highlightHoveredColor", null},
+        {TILE_INDICATORS, "hoveredTileFillColor", null}, {TILE_INDICATORS, "hoveredTileBorderWidth", null},
+        {TILE_INDICATORS, "highlightCurrentTile", null}, {TILE_INDICATORS, "highlightCurrentColor", null},
+        {TILE_INDICATORS, "currentTileFillColor", null}, {TILE_INDICATORS, "currentTileBorderWidth", null},
+    };
+
+    /**
+     * The first start in a profile: the marks of Ground Markers, Object Markers and NPC Indicators are copied over, and
+     * the options changed in those plugins (and in Tile Indicators while it is on) where ours are unchanged.
+     */
     private void copyOnce()
     {
-        if (configs.getConfiguration(InWorldTileMarkersConfig.GROUP, COPIED) != null) { return; }
+        // NPC names come from the game's cache, which the client has loaded by the login screen.
+        GameState state = client.getGameState();
+        if (state == null || state.getState() < GameState.LOGIN_SCREEN.getState()
+            || configs.getConfiguration(InWorldTileMarkersConfig.GROUP, COPIED) != null) { return; }
         configs.setConfiguration(InWorldTileMarkersConfig.GROUP, COPIED, "true");
-        String copied = copyOtherMarks();
-        if (copied != null)
+        Set<String> from = copySettings();
+        int tiles = copyGroundMarkers(), objectCount = copyObjectMarkers(), names = copyNpcNames(), npcLooks = copyNpcTags();
+        if (tiles > 0) { from.add(GROUND_MARKERS); }
+        if (objectCount > 0) { from.add(OBJECT_MARKERS); }
+        if (names + npcLooks > 0) { from.add(NPC_INDICATORS); }
+        if (from.isEmpty()) { return; }
+        List<String> plugins = new ArrayList<>(), on = new ArrayList<>();
+        for (String[] plugin : PLUGINS)
         {
-            notice("In-World Tile Markers copied your " + copied + ". Turn off the plugins they came from, or they are drawn twice."
-                + " Sync on the world map orb copies new ones.");
+            if (!from.contains(plugin[0])) { continue; }
+            plugins.add(plugin[1]);
+            if (enabled(plugin[2])) { on.add(plugin[1]); }
         }
+        String marks = describe(tiles, objectCount, names);
+        notice("In-World Tile Markers took over your marks and settings from " + list(plugins) + (marks == null ? "" : " (" + marks + ")") + "."
+            + (on.isEmpty() ? "" : " Turn off " + list(on) + ", or they are drawn twice.")
+            + " Sync on the world map orb copies what you mark there later.");
+    }
+
+    /** The options changed in RuneLite's marking plugins, where ours are unchanged; returns their settings groups. */
+    private Set<String> copySettings()
+    {
+        Set<String> from = new HashSet<>();
+        boolean tileIndicators = enabled(PLUGINS[3][2]);
+        for (String[] setting : SETTINGS)
+        {
+            String ours = setting[2] != null ? setting[2] : setting[1];
+            String value = setting[0].equals(TILE_INDICATORS) && !tileIndicators ? null : configs.getConfiguration(setting[0], setting[1]);
+            if (value == null || configs.getConfiguration(InWorldTileMarkersConfig.GROUP, ours) != null) { continue; }
+            configs.setConfiguration(InWorldTileMarkersConfig.GROUP, ours, value);
+            from.add(setting[0]);
+        }
+        return from;
+    }
+
+    /** Whether the plugin of this class is turned on. */
+    private boolean enabled(String type)
+    {
+        for (Plugin p : plugins.getPlugins()) { if (p.getClass().getName().equals(type)) { return plugins.isPluginEnabled(p); } }
+        return false;
+    }
+
+    /** "a", "a and b", "a, b and c". */
+    private static String list(List<String> parts)
+    {
+        if (parts.size() < 2) { return String.join("", parts); }
+        return String.join(", ", parts.subList(0, parts.size() - 1)) + " and " + parts.get(parts.size() - 1);
     }
 
     /** Sync: what the other plugins marked since is copied. */
@@ -303,13 +503,19 @@ final class Marking
      */
     String copyOtherMarks()
     {
+        int tiles = copyGroundMarkers(), objectCount = copyObjectMarkers(), names = copyNpcNames(), npcLooks = copyNpcTags();
+        String marks = describe(tiles, objectCount, names);
+        return marks == null && npcLooks > 0 ? npcLooks + " NPC color" + (npcLooks == 1 ? "" : "s") + " and styles" : marks;
+    }
+
+    /** "12 tiles, 3 objects and 2 NPC names", or null when all are 0. */
+    private static String describe(int tiles, int objectCount, int names)
+    {
         List<String> parts = new ArrayList<>();
-        count(parts, copyGroundMarkers(), "tile");
-        count(parts, copyObjectMarkers(), "object");
-        count(parts, copyNpcNames(), "NPC name");
-        if (parts.isEmpty()) { return null; }
-        String last = parts.remove(parts.size() - 1);
-        return parts.isEmpty() ? last : String.join(", ", parts) + " and " + last;
+        count(parts, tiles, "tile");
+        count(parts, objectCount, "object");
+        count(parts, names, "NPC name");
+        return parts.isEmpty() ? null : list(parts);
     }
 
     private static void count(List<String> parts, int n, String what) { if (n > 0) { parts.add(n + " " + what + (n == 1 ? "" : "s")); } }
@@ -332,12 +538,16 @@ final class Marking
         for (int region : regions(OBJECT_MARKERS))
         {
             List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
-            int before = points.size();
+            int changed = 0;
             for (ObjectMarkerSource.ObjectPoint p : ObjectMarkerSource.parse(gson, configs.getConfiguration(OBJECT_MARKERS, "region_" + region)))
             {
-                if (points.stream().noneMatch(o -> o.id == p.id && o.regionX == p.regionX && o.regionY == p.regionY && o.z == p.z)) { points.add(p); }
+                ObjectMarkerSource.ObjectPoint own = points.stream().filter(p::same).findFirst().orElse(null);
+                if (own == null) { points.add(p); changed++; }
+                // Marked here too, without a color or style of its own: Object Markers' are taken.
+                else if (!own.hasLook() && p.hasLook()) { own.borderColor = p.borderColor; own.fillColor = p.fillColor;
+                    own.hull = p.hull; own.outline = p.outline; own.clickbox = p.clickbox; own.tile = p.tile; changed++; }
             }
-            if (points.size() > before) { saveObjects(region, points); added += points.size() - before; }
+            if (changed > 0) { saveObjects(region, points); added += changed; }
         }
         return added;
     }
@@ -355,16 +565,53 @@ final class Marking
     }
 
     /** The regions a plugin saved marks for: its settings region_<id>. */
-    private List<Integer> regions(String group)
+    private List<Integer> regions(String group) { return ids(group, "region_"); }
+
+    /** The numbers of a plugin's settings named prefix<number>. */
+    private List<Integer> ids(String group, String prefix)
     {
-        String prefix = ConfigManager.getWholeKey(group, null, "region_");
-        List<Integer> regions = new ArrayList<>();
-        for (String key : configs.getConfigurationKeys(prefix))
+        String whole = ConfigManager.getWholeKey(group, null, prefix);
+        List<Integer> ids = new ArrayList<>();
+        for (String key : configs.getConfigurationKeys(whole))
         {
-            try { regions.add(Integer.parseInt(key.substring(prefix.length()))); }
-            catch (NumberFormatException ignored) { /* Not a region. */ }
+            try { ids.add(Integer.parseInt(key.substring(whole.length()))); }
+            catch (NumberFormatException ignored) { /* Not one of them. */ }
         }
-        return regions;
+        return ids;
+    }
+
+    /**
+     * NPC Indicators' Tag color and Tag style, saved per NPC id, as the colors and styles of the NPCs' names (an NPC's
+     * id is never kept); a name's own are kept. Returns how many were new.
+     */
+    private int copyNpcTags()
+    {
+        Map<String, MarkerSources.NpcTag> tags = MarkerSources.npcTags(configs, gson);
+        int added = 0;
+        for (int id : ids(NPC_INDICATORS, "highlightcolor_"))
+        {
+            String name = npcName(id);
+            Color color = name == null ? null : configs.getConfiguration(NPC_INDICATORS, "highlightcolor_" + id, Color.class);
+            MarkerSources.NpcTag tag = color == null ? null : tags.computeIfAbsent(name, k -> new MarkerSources.NpcTag());
+            if (tag != null && tag.color == null) { tag.color = color; added++; }
+        }
+        for (int id : ids(NPC_INDICATORS, "tagstyle_"))
+        {
+            String name = npcName(id);
+            String style = name == null ? null : configs.getConfiguration(NPC_INDICATORS, "tagstyle_" + id);
+            MarkerSources.NpcTag tag = !Arrays.asList(STYLES).contains(style) ? null : tags.computeIfAbsent(name, k -> new MarkerSources.NpcTag());
+            if (tag != null && tag.style == null) { tag.style = style; added++; }
+        }
+        if (added > 0) { saveNpcTags(tags); }
+        return added;
+    }
+
+    /** An NPC's name (standardized) from the game's cache, or null. */
+    private String npcName(int id)
+    {
+        NPCComposition composition = client.getNpcDefinition(id);
+        String name = composition == null ? null : composition.getName();
+        return name == null || name.equals("null") ? null : Text.standardize(name);
     }
 
     // Objects
@@ -375,8 +622,9 @@ final class Marking
         WorldView wv = client.getWorldView(entry.getWorldViewId());
         TileObject object = wv == null ? null : findTileObject(wv, event.getActionParam0(), event.getActionParam1(), event.getIdentifier());
         if (object == null) { return; }
+        ObjectMarkerSource.Marked marked = objects.find(object);
         client.getMenu().createMenuEntry(-1)
-            .setOption(objects.marked(object) ? "Unmark object" : "Mark object")
+            .setOption(marked != null ? "Unmark object" : "Mark object")
             .setTarget(event.getTarget())
             .setWorldViewId(entry.getWorldViewId())
             .setParam0(event.getActionParam0())
@@ -384,6 +632,80 @@ final class Marking
             .setIdentifier(event.getIdentifier())
             .setType(MenuAction.RUNELITE)
             .onClick(this::markObject);
+        if (marked != null) { objectMenus(event.getTarget(), object, marked, wv.getMapRegions()); }
+    }
+
+    /** Object Markers' Mark border color, Mark fill color and Mark style menus. */
+    private void objectMenus(String target, TileObject object, ObjectMarkerSource.Marked marked, int[] regions)
+    {
+        Menu border = client.getMenu().createMenuEntry(-2).setOption("Mark border color").setTarget(target)
+            .setType(MenuAction.RUNELITE).createSubMenu();
+        for (Color c : withDefaults(objects.usedColors(regions, false), 1))
+        {
+            border.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
+                .onClick(e -> updateObject(object, p -> p.borderColor = c));
+        }
+        border.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE).onClick(e -> pick(
+            marked.borderColor != null ? marked.borderColor : config.objectColor(), "Mark Border Color", c -> updateObject(object, p -> p.borderColor = c)));
+        if (marked.borderColor != null)
+        {
+            border.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.borderColor = null));
+        }
+
+        Menu fill = client.getMenu().createMenuEntry(-3).setOption("Mark fill color").setTarget(target)
+            .setType(MenuAction.RUNELITE).createSubMenu();
+        for (Color c : withDefaults(objects.usedColors(regions, true), 12))
+        {
+            fill.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
+                .onClick(e -> updateObject(object, p -> p.fillColor = c));
+        }
+        // The fill differs per style; the hull's default (a=50) to start from.
+        fill.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE).onClick(e -> pick(
+            marked.fillColor != null ? marked.fillColor : new Color(0, 0, 0, 50), "Mark Fill Color", c -> updateObject(object, p -> p.fillColor = c)));
+        fill.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.fillColor = null));
+
+        Menu style = client.getMenu().createMenuEntry(-4).setOption("Mark style").setTarget(target)
+            .setType(MenuAction.RUNELITE).createSubMenu();
+        style.createMenuEntry(0).setOption("Hull").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.hull = p.hull != Boolean.TRUE));
+        style.createMenuEntry(0).setOption("Outline").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.outline = p.outline != Boolean.TRUE));
+        style.createMenuEntry(0).setOption("Clickbox").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.clickbox = p.clickbox != Boolean.TRUE));
+        style.createMenuEntry(0).setOption("Tile").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.tile = p.tile != Boolean.TRUE));
+        style.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> {
+            p.hull = null; p.outline = null; p.clickbox = null; p.tile = null;
+        }));
+    }
+
+    /** Changes the saved mark of this object, as Object Markers' updateObjectConfig. */
+    private void updateObject(TileObject object, Consumer<ObjectMarkerSource.ObjectPoint> change)
+    {
+        WorldPoint point = WorldPoint.fromLocalInstance(client, object.getLocalLocation(), object.getPlane());
+        int region = point.getRegionID();
+        ObjectComposition composition = composition(object);
+        String name = composition == null ? null : composition.getName();
+        List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
+        for (ObjectMarkerSource.ObjectPoint p : points)
+        {
+            if (matches(p, object, name, point))
+            {
+                change.accept(p);
+                saveObjects(region, points);
+                return;
+            }
+        }
+    }
+
+    /** The same object, or a multiloc marked under another name, or another id spawned with the same name. */
+    private static boolean matches(ObjectMarkerSource.ObjectPoint p, TileObject object, String name, WorldPoint point)
+    {
+        return (p.id == object.getId() || p.name.equals(name))
+            && p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane();
+    }
+
+    /** The object as it is seen now: a multiloc's current form. */
+    private ObjectComposition composition(TileObject object)
+    {
+        ObjectComposition composition = client.getObjectDefinition(object.getId());
+        return composition != null && composition.getImpostorIds() != null ? composition.getImpostor() : composition;
     }
 
     private void markObject(MenuEntry entry)
@@ -392,8 +714,7 @@ final class Marking
         TileObject object = wv == null ? null : findTileObject(wv, entry.getParam0(), entry.getParam1(), entry.getIdentifier());
         if (object == null) { return; }
         // The object's id is its base id; the composition is the object as it is seen now.
-        ObjectComposition composition = client.getObjectDefinition(object.getId());
-        if (composition != null && composition.getImpostorIds() != null) { composition = composition.getImpostor(); }
+        ObjectComposition composition = composition(object);
         String name = composition == null ? null : composition.getName();
         // Objects without a name are ambiguous: not marked, as in Object Markers.
         if (Strings.isNullOrEmpty(name) || name.equals("null")) { return; }
@@ -401,9 +722,7 @@ final class Marking
         WorldPoint point = WorldPoint.fromLocalInstance(client, object.getLocalLocation(), object.getPlane());
         int region = point.getRegionID();
         List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
-        // The same object, or a multiloc marked under another name, or another id spawned with the same name.
-        boolean removed = points.removeIf(p -> (p.id == object.getId() || p.name.equals(name))
-            && p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane());
+        boolean removed = points.removeIf(p -> matches(p, object, name, point));
         if (!removed) { points.add(new ObjectMarkerSource.ObjectPoint(object.getId(), name, point.getRegionX(), point.getRegionY(), point.getPlane())); }
         saveObjects(region, points);
     }
@@ -449,14 +768,69 @@ final class Marking
         String name = npc == null ? null : npc.getName();
         if (name == null) { return; }
         List<String> names = Text.fromCSV(config.npcNames());
-        // A name matched by a pattern (with *) has no option: Un-tag-All cannot remove the pattern.
-        if (names.stream().anyMatch(n -> !n.equalsIgnoreCase(name) && WildcardMatcher.matches(n, name))) { return; }
         boolean tagged = names.stream().anyMatch(name::equalsIgnoreCase);
-        client.getMenu().createMenuEntry(-1)
-            .setOption(tagged ? "Un-tag-All" : "Tag-All")
-            .setTarget(event.getTarget())
-            .setType(MenuAction.RUNELITE)
-            .onClick(e -> tagAll(name));
+        boolean pattern = names.stream().anyMatch(n -> !n.equalsIgnoreCase(name) && WildcardMatcher.matches(n, name));
+        // A name matched by a pattern (with *) has no Tag-All: Un-tag-All cannot remove the pattern.
+        if (!pattern)
+        {
+            client.getMenu().createMenuEntry(-1)
+                .setOption(tagged ? "Un-tag-All" : "Tag-All")
+                .setTarget(event.getTarget())
+                .setType(MenuAction.RUNELITE)
+                .onClick(e -> tagAll(name));
+        }
+        if (tagged || pattern) { npcMenus(event.getTarget(), name); }
+    }
+
+    private static final String[] STYLE_NAMES = {"Hull", "Tile", "True tile", "South-west tile", "South-west true tile", "Outline"};
+    private static final String[] STYLES = {"hull", "tile", "truetile", "swtile", "swtruetile", "outline"};
+
+    /** NPC Indicators' Tag color and Tag style menus, per name. */
+    private void npcMenus(String target, String name)
+    {
+        Map<String, MarkerSources.NpcTag> tags = MarkerSources.npcTags(configs, gson);
+        MarkerSources.NpcTag own = tags.get(Text.standardize(name));
+        List<Color> used = new ArrayList<>();
+        for (MarkerSources.NpcTag t : tags.values()) { if (t.color != null && !used.contains(t.color) && used.size() < 5) { used.add(t.color); } }
+        Menu colors = client.getMenu().createMenuEntry(-2).setOption("Tag color").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        for (Color c : withDefaults(used, 1))
+        {
+            colors.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
+                .onClick(e -> updateNpc(name, t -> t.color = c));
+        }
+        colors.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE)
+            .onClick(e -> pick(own != null && own.color != null ? own.color : config.npcColor(), "Tag Color", c -> updateNpc(name, t -> t.color = c)));
+        if (own != null && own.color != null)
+        {
+            colors.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.color = null));
+        }
+        Menu styles = client.getMenu().createMenuEntry(-3).setOption("Tag style").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        for (int i = 0; i < STYLES.length; i++)
+        {
+            String style = STYLES[i];
+            styles.createMenuEntry(0).setOption(STYLE_NAMES[i]).setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.style = style));
+        }
+        if (own != null && own.style != null)
+        {
+            styles.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.style = null));
+        }
+    }
+
+    /** Changes a name's own color or style; a name with neither is removed. */
+    private void updateNpc(String name, Consumer<MarkerSources.NpcTag> change)
+    {
+        Map<String, MarkerSources.NpcTag> tags = MarkerSources.npcTags(configs, gson);
+        String key = Text.standardize(name);
+        MarkerSources.NpcTag tag = tags.computeIfAbsent(key, k -> new MarkerSources.NpcTag());
+        change.accept(tag);
+        if (tag.color == null && tag.style == null) { tags.remove(key); }
+        saveNpcTags(tags);
+    }
+
+    private void saveNpcTags(Map<String, MarkerSources.NpcTag> tags)
+    {
+        if (tags.isEmpty()) { configs.unsetConfiguration(InWorldTileMarkersConfig.GROUP, MarkerSources.NPC_TAGS); }
+        else { configs.setConfiguration(InWorldTileMarkersConfig.GROUP, MarkerSources.NPC_TAGS, gson.toJson(tags)); }
     }
 
     private void tagAll(String name)

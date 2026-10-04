@@ -66,6 +66,8 @@ final class MarkerSources
     /** The marked tiles in the scene; drawn in the tile options of the moment (collect). */
     private final List<Ground> ground = new ArrayList<>();
     private List<String> npcHighlights = Collections.emptyList();
+    /** Tag color and Tag style per NPC name (standardized), read with the names. */
+    private Map<String, NpcTag> npcTags = Collections.emptyMap();
     // Fadeout and predicted destination state.
     private WorldPoint lastPlayerTile, lastDestination, predicted;
     private long stillSince, arrivedAt, predictedAt;
@@ -91,11 +93,39 @@ final class MarkerSources
         visit(client.getTopLevelWorldView());
     }
 
-    /** The tagged names (NPC names), as NPC Indicators' list. */
+    /** The tagged names (NPC names), as NPC Indicators' list, and their own colors and styles. */
     private void readNpcHighlights()
     {
         String list = config.npcNames();
         npcHighlights = list == null || list.isEmpty() ? Collections.emptyList() : Text.fromCSV(list);
+        npcTags = npcTags(configs, gson);
+    }
+
+    /** Config key of the colors and styles per NPC name. */
+    static final String NPC_TAGS = "npcTags";
+
+    /** The colors and styles per NPC name as saved; an unreadable save counts as none. */
+    static Map<String, NpcTag> npcTags(ConfigManager configs, Gson gson)
+    {
+        try
+        {
+            Map<String, NpcTag> tags = gson.fromJson(configs.getConfiguration(InWorldTileMarkersConfig.GROUP, NPC_TAGS),
+                new com.google.gson.reflect.TypeToken<Map<String, NpcTag>>() { }.getType());
+            if (tags != null) { tags.values().removeIf(Objects::isNull); return tags; }
+        }
+        catch (RuntimeException ignored)
+        {
+            // None.
+        }
+        return new HashMap<>();
+    }
+
+    /** A tagged NPC name's own color and style (Tag color, Tag style); null for the options'. */
+    static final class NpcTag
+    {
+        Color color;
+        /** hull, tile, truetile, swtile, swtruetile or outline, as NPC Indicators' styles. */
+        String style;
     }
 
     /**
@@ -257,16 +287,30 @@ final class MarkerSources
                     scale(config.currentTileFillColor(), alpha), config.currentTileBorderWidth(), null))));
             }
         }
-        // Tagged NPCs' tiles.
+        // Tagged NPCs' tile styles, as NPC Indicators draws them.
         for (NPC npc : npcs)
         {
-            if (!config.npcTile() || !renderNpc(npc)) { continue; }
+            if (!renderNpc(npc)) { continue; }
             NPCComposition composition = npc.getTransformedComposition();
+            if (composition == null || composition.getSize() < 1 || composition.getSize() > 64) { continue; }
+            NpcTag tag = tag(npc);
+            String style = tag == null ? null : tag.style;
+            int size = composition.getSize(), npcPlane = npc.getWorldView().getPlane(), offset = (size - 1) * 64;
+            String key = "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex();
             LocalPoint local = npc.getLocalLocation();
-            if (composition == null || composition.getSize() < 1 || composition.getSize() > 64 || local == null) { continue; }
-            int size = composition.getSize();
-            result.add(layer(Marker.NPC_TILE, new Marker("npc:" + npc.getWorldView().getId() + ":" + npc.getIndex() + ":tile", local,
-                npc.getWorldView().getPlane(), size, size, config.npcColor(), NPC_FILL, config.npcBorderWidth(), null)));
+            // The true tile only when a style needs it: where the server has the NPC (its south-west tile).
+            WorldPoint server = style(style, "truetile", config.npcTrueTile()) || style(style, "swtruetile", config.npcSouthWestTrueTile())
+                ? npc.getWorldLocation() : null;
+            LocalPoint trueSw = server == null ? null : LocalPoint.fromWorld(npc.getWorldView(), server);
+            Color color = npcColor(npc);
+            if (style(style, "tile", config.npcTile()) && local != null)
+            { result.add(layer(Marker.NPC_TILE, npcMarker(key + ":tile", local, npcPlane, size, color))); }
+            if (style(style, "truetile", config.npcTrueTile()) && trueSw != null)
+            { result.add(layer(Marker.NPC_TILE + 1, npcMarker(key + ":true", trueSw.plus(offset, offset), npcPlane, size, color))); }
+            if (style(style, "swtile", config.npcSouthWestTile()) && local != null)
+            { result.add(layer(Marker.NPC_TILE + 2, npcMarker(key + ":sw", local.plus(-offset, -offset), npcPlane, 1, color))); }
+            if (style(style, "swtruetile", config.npcSouthWestTrueTile()) && trueSw != null)
+            { result.add(layer(Marker.NPC_TILE + 3, npcMarker(key + ":swtrue", trueSw, npcPlane, 1, color))); }
         }
         // Marked objects' tile style: the stroke is capped at 2, as in Object Markers.
         for (ObjectMarkerSource.Resolved o : visibleObjects())
@@ -449,15 +493,28 @@ final class MarkerSources
             : corners(config.hoveredTileCornersOnly(), config.hoveredTileCornerSize(), layer(Marker.HOVER, m));
     }
 
-    /** The fill of tagged NPCs' tiles and hulls, as NPC Indicators' default. */
-    private static final Color NPC_FILL = new Color(0, 0, 0, 50);
+    private Marker npcMarker(String key, LocalPoint point, int plane, int size, Color color)
+    { return new Marker(key, point, plane, size, size, color, config.npcFillColor(), config.npcBorderWidth(), null); }
 
-    /** Dead NPCs and pets are not highlighted, as NPC Indicators' defaults. */
-    private static boolean renderNpc(NPC npc)
+    /** A name's own style replaces the styles of the options, as in NPC Indicators. */
+    private static boolean style(String own, String name, boolean configured) { return own != null ? own.equals(name) : configured; }
+
+    /** The tag of this NPC's name, or null. */
+    private NpcTag tag(NPC npc) { return npcTags.isEmpty() || npc.getName() == null ? null : npcTags.get(Text.standardize(npc.getName())); }
+
+    /** An NPC's highlight color: its name's own (Tag color), else the option's. */
+    Color npcColor(NPC npc)
     {
-        if (npc.isDead()) { return false; }
+        NpcTag tag = tag(npc);
+        return tag != null && tag.color != null ? tag.color : config.npcColor();
+    }
+
+    /** Dead NPCs and pets as the options say (NPC Indicators' Ignore dead NPCs and Ignore pets). */
+    private boolean renderNpc(NPC npc)
+    {
+        if (npc.isDead() && config.npcIgnoreDead()) { return false; }
         NPCComposition composition = npc.getTransformedComposition();
-        return composition == null || !composition.isFollower();
+        return composition == null || !(composition.isFollower() && config.npcIgnorePets());
     }
 
     /** Hulls and clickboxes, nearest first. */
@@ -470,10 +527,12 @@ final class MarkerSources
         for (NPC npc : npcs)
         {
             if (npc.getWorldView() != top || !renderNpc(npc)) { continue; }
-            if (config.npcOutline())
-            { result.add(ModelTarget.npcOutline("npc:" + npc.getIndex() + ":outline", npc, config.npcColor(), config.npcBorderWidth())); }
-            if (config.npcHull())
-            { result.add(ModelTarget.npc("npc:" + npc.getIndex() + ":hull", npc, config.npcColor(), NPC_FILL, config.npcBorderWidth())); }
+            NpcTag tag = tag(npc);
+            String style = tag == null ? null : tag.style;
+            if (style(style, "outline", config.npcOutline()))
+            { result.add(ModelTarget.npcOutline("npc:" + npc.getIndex() + ":outline", npc, npcColor(npc), config.npcBorderWidth())); }
+            if (style(style, "hull", config.npcHull()))
+            { result.add(ModelTarget.npc("npc:" + npc.getIndex() + ":hull", npc, npcColor(npc), config.npcFillColor(), config.npcBorderWidth())); }
         }
         for (ObjectMarkerSource.Resolved o : visibleObjects())
         {
@@ -569,8 +628,11 @@ final class MarkerSources
     List<NPC> npcOutlines()
     {
         List<NPC> result = new ArrayList<>();
-        if (!config.npcOutline()) { return result; }
-        for (NPC npc : npcs) { if (renderNpc(npc)) { result.add(npc); } }
+        for (NPC npc : npcs)
+        {
+            NpcTag tag = tag(npc);
+            if (renderNpc(npc) && style(tag == null ? null : tag.style, "outline", config.npcOutline())) { result.add(npc); }
+        }
         return result;
     }
 
@@ -600,7 +662,7 @@ final class MarkerSources
     }
     void clear() { visible = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
         lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0;
-        ground.clear(); npcs.clear(); objectMarkers.clear(); npcHighlights = Collections.emptyList(); }
+        ground.clear(); npcs.clear(); objectMarkers.clear(); npcHighlights = Collections.emptyList(); npcTags = Collections.emptyMap(); }
 
     /** A marked tile in the scene. */
     private static final class Ground

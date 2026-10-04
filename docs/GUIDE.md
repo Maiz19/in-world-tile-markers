@@ -8,23 +8,23 @@ Normal overlay lines are drawn on top of the game image, so Stretched Mode scale
 
 Hold Shift and right-click:
 
-- **a tile:** Mark or Unmark, and Label on a marked tile.
-- **an object:** Mark object or Unmark object.
-- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. Names can also be typed into **NPC names**, separated by commas; `*` matches any text (`goblin*`).
+- **a tile:** Mark or Unmark. A marked tile also has Label and Color (its own colour, or Reset).
+- **an object:** Mark object or Unmark object. A marked object also has Mark border color, Mark fill color and Mark style (hull, outline, clickbox, tile).
+- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. A tagged NPC also has Tag color and Tag style (hull, tile, true tile, south-west tile, south-west true tile, outline), for its name. Names can also be typed into **NPC names**, separated by commas; `*` matches any text (`goblin*`).
 
-Colour, fill, border width and highlight style (hull, outline, clickbox, tile) are set per kind in the settings. Tiles imported from Ground Markers keep their own colour.
-
-These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show.
+The settings hold the colours and styles of marks without their own. These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show.
 
 ### Your marks from Ground Markers, Object Markers and NPC Indicators
 
-The first time In-World Tile Markers starts in a RuneLite profile, it copies your tiles from Ground Markers, your objects from Object Markers and your names from NPC Indicators. Their settings are only read, never changed. Turn those plugins off afterwards, or the marks are drawn twice.
+The first time In-World Tile Markers starts in a RuneLite profile, it takes over your tiles from Ground Markers, your objects from Object Markers and your names from NPC Indicators, with their own colours and styles. It also takes over the options you changed in those plugins, and in Tile Indicators while it is on, unless you changed the same option here. Their settings are only read, never changed. Turn those plugins off afterwards, or everything is drawn twice.
+
+NPC Indicators keeps colours and styles per NPC; here they are kept per name.
 
 **Sync** on the world map orb's right-click menu copies what you marked in them since. It only adds: a mark you removed here comes back if the other plugin still has it.
 
 ### Sharing tiles
 
-**Export In-World Tile Markers** on the world map orb copies the tiles of the area you are in to the clipboard, in Ground Markers' format. **Import In-World Tile Markers** adds tiles from the clipboard, from this export or Ground Markers' own. **Import, export and sync** turns these options off.
+**Export In-World Tile Markers** on the world map orb copies the tiles of the area you are in to the clipboard, in Ground Markers' format. **Import In-World Tile Markers** adds tiles from the clipboard, from this export or Ground Markers' own. **Clear In-World Tile Markers** removes the tiles of the area you are in. **Import, export, sync, clear** turns these options off.
 
 ### Tile Packs
 

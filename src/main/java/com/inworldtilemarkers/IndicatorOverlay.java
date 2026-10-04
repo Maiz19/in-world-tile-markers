@@ -45,7 +45,7 @@ final class IndicatorOverlay extends Overlay
             for (NPC npc : sources.npcOutlines())
             {
                 if (!plugin.markerInScene("npc:" + npc.getIndex() + ":outline"))
-                { outlines.drawOutline(npc, (int) config.npcBorderWidth(), config.npcColor(), 0); }
+                { outlines.drawOutline(npc, (int) config.npcBorderWidth(), sources.npcColor(npc), 0); }
             }
             for (ModelTarget t : plugin.modelTargets())
             {

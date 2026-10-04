@@ -9,7 +9,7 @@ These files adapt parts of RuneLite; each names its origin in its header:
 
 - `FloatClickbox.java`: the clickbox of `Perspective.getClickbox`, `RectangleUnion.union` and `SimplePolygon.intersectWithConvex`, computed in floats.
 - `ModelShapes.java` and `Terrain.java`: the projection of `Perspective.localToCanvasGpu` / `modelToCanvas`, and the height interpolation of `Perspective.getTileHeight`.
-- `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators, and Ground Markers' import and export (its saved tile format). Copying the marks those plugins saved only reads their settings.
+- `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators with their colour and style menus, and Ground Markers' import, export and clear (its saved tile format). Taking over the marks and options those plugins saved only reads their settings.
 - `MarkerSources.java`: Ground Markers' point loading and NPC Indicators' name matching, for In-World Tile Markers' own saved marks.
 - `ObjectMarkerSource.java`: Object Markers' matching and display rules, for In-World Tile Markers' own saved marks.
 - `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators, and option names of Ground Markers, Object Markers and NPC Indicators.

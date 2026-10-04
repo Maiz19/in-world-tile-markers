@@ -98,7 +98,7 @@ public interface InWorldTileMarkersConfig extends Config
     @ConfigItem(keyName = "tilePacks", name = "Tile Packs", description = "Also draw the packs turned on in the Tile Packs plugin. Turn Tile Packs itself off once your packs are chosen, or they are drawn twice", position = 4, section = groundSection)
     default boolean tilePacks() { return true; }
 
-    @ConfigItem(keyName = "showImportExport", name = "Import, export and sync", description = "Import, Export and Sync on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers and NPC Indicators", position = 5, section = groundSection)
+    @ConfigItem(keyName = "showImportExport", name = "Import, export, sync, clear", description = "Import, Export, Sync and Clear on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers and NPC Indicators; Clear removes the tiles of the area you are in", position = 5, section = groundSection)
     default boolean showImportExport() { return true; }
 
     // NPCs
@@ -110,20 +110,39 @@ public interface InWorldTileMarkersConfig extends Config
     default String npcNames() { return ""; }
 
     @Alpha
-    @ConfigItem(keyName = "npcColor", name = "Highlight color", description = "Color of tagged NPCs", position = 2, section = npcSection)
+    @ConfigItem(keyName = "npcColor", name = "Highlight color", description = "Color of the NPC highlight border", position = 2, section = npcSection)
     default Color npcColor() { return Color.CYAN; }
 
-    @ConfigItem(keyName = "npcHull", name = "Highlight hull", description = "Highlight the NPC's hull", position = 3, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcFillColor", name = "Fill color", description = "Color of the NPC highlight fill", position = 3, section = npcSection)
+    default Color npcFillColor() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcHull", name = "Highlight hull", description = "Highlight the NPC's hull", position = 4, section = npcSection)
     default boolean npcHull() { return true; }
 
-    @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 4, section = npcSection)
+    @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 5, section = npcSection)
     default boolean npcTile() { return false; }
 
-    @ConfigItem(keyName = "npcOutline", name = "Highlight outline", description = "Highlight the NPC's outline", position = 5, section = npcSection)
+    @ConfigItem(keyName = "npcTrueTile", name = "Highlight true tile", description = "Highlight the tiles the NPC is on for the server", position = 6, section = npcSection)
+    default boolean npcTrueTile() { return false; }
+
+    @ConfigItem(keyName = "npcSouthWestTile", name = "Highlight south west tile", description = "Highlight the NPC's south western tile", position = 7, section = npcSection)
+    default boolean npcSouthWestTile() { return false; }
+
+    @ConfigItem(keyName = "npcSouthWestTrueTile", name = "Highlight south west true tile", description = "Highlight the NPC's south western true tile", position = 8, section = npcSection)
+    default boolean npcSouthWestTrueTile() { return false; }
+
+    @ConfigItem(keyName = "npcOutline", name = "Highlight outline", description = "Highlight the NPC's outline", position = 9, section = npcSection)
     default boolean npcOutline() { return false; }
 
-    @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 6, section = npcSection)
+    @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 10, section = npcSection)
     default double npcBorderWidth() { return 2; }
+
+    @ConfigItem(keyName = "npcIgnoreDead", name = "Ignore dead NPCs", description = "No highlight once an NPC is dead", position = 11, section = npcSection)
+    default boolean npcIgnoreDead() { return true; }
+
+    @ConfigItem(keyName = "npcIgnorePets", name = "Ignore pets", description = "No highlight on pets", position = 12, section = npcSection)
+    default boolean npcIgnorePets() { return true; }
 
     // Destination tile
 
@@ -231,22 +250,26 @@ public interface InWorldTileMarkersConfig extends Config
     default boolean markObjects() { return true; }
 
     @Alpha
-    @ConfigItem(keyName = "objectColor", name = "Marker color", description = "Color of marked objects", position = 1, section = objectSection)
+    @ConfigItem(keyName = "objectColor", name = "Marker color", description = "Color of marked objects without a color of their own (Mark border color)", position = 1, section = objectSection)
     default Color objectColor() { return Color.YELLOW; }
 
-    @ConfigItem(keyName = "objectHull", name = "Highlight hull", description = "Highlight the object's hull", position = 2, section = objectSection)
+    @Alpha
+    @ConfigItem(keyName = "objectFillColor", name = "Fill color", description = "Fill of marked objects without a fill of their own (Mark fill color). Unset: dark for hulls, a light shade of the border for clickboxes and tiles", position = 2, section = objectSection)
+    Color objectFillColor();
+
+    @ConfigItem(keyName = "objectHull", name = "Highlight hull", description = "Highlight the object's hull", position = 3, section = objectSection)
     default boolean objectHull() { return true; }
 
-    @ConfigItem(keyName = "objectOutline", name = "Highlight outline", description = "Highlight the object's outline", position = 3, section = objectSection)
+    @ConfigItem(keyName = "objectOutline", name = "Highlight outline", description = "Highlight the object's outline", position = 4, section = objectSection)
     default boolean objectOutline() { return false; }
 
-    @ConfigItem(keyName = "objectClickbox", name = "Highlight clickbox", description = "Highlight the object's clickbox", position = 4, section = objectSection)
+    @ConfigItem(keyName = "objectClickbox", name = "Highlight clickbox", description = "Highlight the object's clickbox", position = 5, section = objectSection)
     default boolean objectClickbox() { return false; }
 
-    @ConfigItem(keyName = "objectTile", name = "Highlight tile", description = "Highlight the tiles the object stands on", position = 5, section = objectSection)
+    @ConfigItem(keyName = "objectTile", name = "Highlight tile", description = "Highlight the tiles the object stands on", position = 6, section = objectSection)
     default boolean objectTile() { return false; }
 
-    @ConfigItem(keyName = "objectBorderWidth", name = "Border width", description = "Width of the highlight border", position = 6, section = objectSection)
+    @ConfigItem(keyName = "objectBorderWidth", name = "Border width", description = "Width of the highlight border", position = 7, section = objectSection)
     default double objectBorderWidth() { return 2; }
 
     // Path Marker, active path

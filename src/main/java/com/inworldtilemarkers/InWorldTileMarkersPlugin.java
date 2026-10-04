@@ -434,7 +434,7 @@ public class InWorldTileMarkersPlugin extends Plugin
         // another try after a failure.
         failedUntil = 0;
         if (key.startsWith(MarkerSources.TILES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
-        else if (key.equals("npcNames")) { npcsChanged = true; }
+        else if (key.equals("npcNames") || key.equals(MarkerSources.NPC_TAGS)) { npcsChanged = true; }
     }
 
     private static final String TILE_PACKS = "com.tilepacks.TilePacksPlugin";
