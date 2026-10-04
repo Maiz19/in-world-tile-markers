@@ -343,15 +343,15 @@ final class SceneShapeRenderer
     static final float[] DOT_X = new float[16], DOT_Y = new float[16];
     static { for (int i = 0; i < 16; i++) { DOT_X[i] = (float) Math.cos(i * Math.PI / 8) * 4; DOT_Y[i] = (float) Math.sin(i * Math.PI / 8) * 4; } }
 
-    /** A shape on the screen around the marker's point (Marker.offX, or the dot), as large in pixels as it was drawn. */
+    /** A shape on the screen around the marker's point (Marker.offX, or the dot), in pixels or as part of the world. */
     private boolean screen(Marker m, LocalPoint at, int level, int height)
     {
         float[] ox = m.dot ? DOT_X : m.offX, oy = m.dot ? DOT_Y : m.offY;
-        float scale = m.dot ? pixel : 1;
         int n = ox.length;
         ensure(n);
         camera.project(at.getX(), at.getY(), height - m.lift, point);
         if (!(point[2] >= PARTIAL_NEAR)) { return false; }
+        float scale = m.dot ? pixel : m.worldSized ? camera.scale / point[2] : 1;
         for (int i = 0; i < n; i++) { px[i] = point[0] + ox[i] * scale; py[i] = point[1] + oy[i] * scale; pd[i] = point[2]; }
         return shape(m, at, level, outline.buildPolygon(px, py, pd, n, width(m.borderWidth), false), m.fill);
     }

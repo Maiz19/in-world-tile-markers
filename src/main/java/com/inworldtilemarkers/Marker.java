@@ -44,9 +44,11 @@ final class Marker
     int[] quadX, quadY;
     /**
      * A shape drawn on the screen around point (another plugin's timer pie or dot) instead of the rectangle: its outline
-     * in canvas pixels from where point projects, so it keeps its size on screen.
+     * in canvas pixels from where point projects, or with worldSized in world units at that point, which every frame
+     * scales with its own camera.
      */
     float[] offX, offY;
+    boolean worldSized;
     /** How far above the ground the screen shape hangs (local units), as its plugin placed it. */
     int lift;
     /** An open polyline on the ground in local coordinates (NPC Aggression Timer's area lines) instead of the rectangle. */

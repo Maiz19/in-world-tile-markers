@@ -355,7 +355,7 @@ final class TileCapture implements SourcePlugin.Source
 
     /**
      * A round shape on the screen (a timer pie, its rim, a dot) as a scene mark kept around the place its centre hangs at
-     * (see anchor), the same size in pixels; false (not taken) when the centre meets no ground.
+     * (see anchor), sized as part of the world (see worldPerPixel); false (not taken) when the centre meets no ground.
      */
     private boolean screen(java.awt.Shape shape, Color color, boolean fill, float width, WorldView wv, int plane, List<Marker> out, ModelShapes.Camera camera)
     {
@@ -380,10 +380,37 @@ final class TileCapture implements SourcePlugin.Source
         m.lift = Math.round(g[2]);
         m.offX = new float[points.length / 2];
         m.offY = new float[points.length / 2];
-        for (int i = 0; i < m.offX.length; i++) { m.offX[i] = points[i * 2] - cx; m.offY[i] = points[i * 2 + 1] - cy; }
+        float units = worldPerPixel(wv, plane, camera);
+        m.worldSized = units > 0;
+        for (int i = 0; i < m.offX.length; i++)
+        {
+            m.offX[i] = (points[i * 2] - cx) * (units > 0 ? units : 1);
+            m.offY[i] = (points[i * 2 + 1] - cy) * (units > 0 ? units : 1);
+        }
         m.layer = SceneShapeRenderer.HULL_LAYER;
         out.add(m);
         return true;
+    }
+
+    /** World units per canvas pixel at your distance when this plugin's first round shape was seen; 0 until then. */
+    private float worldPerPixel;
+
+    /**
+     * Round shapes as part of the world: plugins draw timer pies the same size on the screen at every zoom, so zoomed out
+     * they covered their rock and more. A shape keeps the size its plugin drew the first one at, at your distance, and from
+     * then on scales with the world each frame, as the rock does (see Marker.worldSized). 0 while it cannot be told.
+     */
+    private float worldPerPixel(WorldView wv, int plane, ModelShapes.Camera camera)
+    {
+        Player me = client.getLocalPlayer();
+        LocalPoint at = me == null ? null : me.getLocalLocation();
+        if (worldPerPixel == 0 && at != null)
+        {
+            float[] p = new float[3];
+            camera.project(at.getX(), at.getY(), Terrain.height(wv, at.getX(), at.getY(), plane), p);
+            if (p[2] > 0) { worldPerPixel = p[2] / camera.scale; }
+        }
+        return worldPerPixel;
     }
 
     /**

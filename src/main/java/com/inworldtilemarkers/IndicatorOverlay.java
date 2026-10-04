@@ -132,9 +132,20 @@ final class IndicatorOverlay extends Overlay
         if (p == null) { return null; }
         java.awt.geom.Path2D.Float path = new java.awt.geom.Path2D.Float();
         float[] ox = m.dot ? SceneShapeRenderer.DOT_X : m.offX, oy = m.dot ? SceneShapeRenderer.DOT_Y : m.offY;
+        // Sized as part of the world: scaled by the camera now (Marker.worldSized).
+        float scale = 1;
+        if (m.worldSized)
+        {
+            ModelShapes.Camera camera = ModelShapes.Camera.of(client);
+            float[] q = new float[3];
+            camera.project(m.point.getX(), m.point.getY(), Perspective.getTileHeight(client, m.point, m.plane) - m.lift, q);
+            if (!(q[2] > 0)) { return null; }
+            scale = camera.scale / q[2];
+        }
         for (int i = 0; i < ox.length; i++)
         {
-            if (i == 0) { path.moveTo(p.getX() + ox[i], p.getY() + oy[i]); } else { path.lineTo(p.getX() + ox[i], p.getY() + oy[i]); }
+            float x = p.getX() + ox[i] * scale, y = p.getY() + oy[i] * scale;
+            if (i == 0) { path.moveTo(x, y); } else { path.lineTo(x, y); }
         }
         path.closePath();
         return path;
