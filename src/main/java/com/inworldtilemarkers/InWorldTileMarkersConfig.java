@@ -177,7 +177,7 @@ public interface InWorldTileMarkersConfig extends Config
 
     @Alpha
     @ConfigItem(keyName = "npcOutlineColor", name = "Outline color", description = "Border color of the outline", position = 16, section = npcStyleSection)
-    default Color npcOutlineColor() { return Color.WHITE; }
+    default Color npcOutlineColor() { return Color.CYAN; }
 
     @ConfigItem(keyName = "npcClickbox", name = "Highlight clickbox", description = "Highlight the NPC's clickbox", position = 17, section = npcStyleSection)
     default boolean npcClickbox() { return false; }
