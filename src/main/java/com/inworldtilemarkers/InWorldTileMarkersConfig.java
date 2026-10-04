@@ -122,11 +122,11 @@ public interface InWorldTileMarkersConfig extends Config
 
     @Alpha
     @ConfigItem(keyName = "npcHullColor", name = "Hull color", description = "Border color of the hull", position = 1, section = npcStyleSection)
-    default Color npcHullColor() { return Color.CYAN; }
+    default Color npcHullColor() { return new Color(0, 229, 255); }
 
     @Alpha
     @ConfigItem(keyName = "npcHullFill", name = "Hull fill", description = "Fill color of the hull", position = 2, section = npcStyleSection)
-    default Color npcHullFill() { return new Color(0, 255, 255, 20); }
+    default Color npcHullFill() { return new Color(0, 229, 255, 25); }
 
     @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 3, section = npcStyleSection)
     default boolean npcTile() { return false; }
@@ -177,18 +177,18 @@ public interface InWorldTileMarkersConfig extends Config
 
     @Alpha
     @ConfigItem(keyName = "npcOutlineColor", name = "Outline color", description = "Border color of the outline", position = 16, section = npcStyleSection)
-    default Color npcOutlineColor() { return Color.CYAN; }
+    default Color npcOutlineColor() { return Color.WHITE; }
 
     @ConfigItem(keyName = "npcClickbox", name = "Highlight clickbox", description = "Highlight the NPC's clickbox", position = 17, section = npcStyleSection)
     default boolean npcClickbox() { return false; }
 
     @Alpha
     @ConfigItem(keyName = "npcClickboxColor", name = "Clickbox color", description = "Border color of the clickbox", position = 18, section = npcStyleSection)
-    default Color npcClickboxColor() { return Color.CYAN; }
+    default Color npcClickboxColor() { return new Color(255, 176, 0); }
 
     @Alpha
     @ConfigItem(keyName = "npcClickboxFill", name = "Clickbox fill", description = "Fill color of the clickbox", position = 19, section = npcStyleSection)
-    default Color npcClickboxFill() { return new Color(0, 255, 255, 20); }
+    default Color npcClickboxFill() { return new Color(255, 176, 0, 30); }
 
     @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 2, section = npcSection)
     default double npcBorderWidth() { return 2; }

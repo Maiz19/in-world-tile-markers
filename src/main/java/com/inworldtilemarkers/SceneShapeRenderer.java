@@ -42,6 +42,8 @@ final class SceneShapeRenderer
     private int frame;
     /** New outline traces per frame are limited to this much time; the rest are drawn as hulls. */
     private static final long OUTLINE_BUDGET_NANOS = 2_500_000;
+    /** Frames an outline's last trace may stand in for a new one over the budget; then it is traced anyway. */
+    static final int STALE_OUTLINE_FRAMES = 2;
     private long outlineNanos;
 
     /** Models no scene object uses now, kept for the next ones: making and uploading a model costs. */
@@ -102,8 +104,15 @@ final class SceneShapeRenderer
         /** The model's clickbox is its projected bounding box (Model.useBoundingBox), not a union of face rectangles. */
         boolean boundingBox;
         List<float[]> loops;
-        /** The last outline traced, for a frame over the outline budget: a frame old rather than another shape. */
+        /**
+         * The last outline traced, for a frame over the outline budget, and the frame and the projected points' bounds it
+         * was traced for (centre and size): moved to the bounds of now rather than another shape.
+         */
         List<float[]> traced;
+        int tracedFrame;
+        float tracedCenterX, tracedCenterY, tracedWidth, tracedHeight;
+        /** The projected points' bounds: centre and size. */
+        float centerX, centerY, width, height2d;
         /** The projected bounding box's convex hull (clickbox bounds), or null; and the clickbox from it. */
         float[] boundsHull;
         List<float[]> clickbox;
@@ -362,18 +371,26 @@ final class SceneShapeRenderer
         boolean asHull = false;
         if (t.outline && projected.loops == null)
         {
-            // Over this frame's budget: the outline traced last, a frame old, rather than a hull border for a frame
-            // (outlines flipped between the two in a crowd); a hull border only before the first trace.
+            // Over this frame's budget: the outline traced last, moved to where the model is now, rather than a hull border
+            // for a frame (outlines flipped between the two in a crowd); a hull border only before the first trace. At
+            // most a few frames old: past that it is traced anyway, or the farthest outlines would never be traced again.
             boolean over = outlineNanos > OUTLINE_BUDGET_NANOS;
-            if (over && projected.traced != null) { projected.loops = projected.traced; }
+            if (over && projected.traced != null && frame - projected.tracedFrame <= STALE_OUTLINE_FRAMES)
+            {
+                projected.loops = moved(projected.traced, projected.tracedCenterX, projected.tracedCenterY, projected.tracedWidth,
+                    projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d);
+            }
             else
             {
-                asHull = over || !faces(t, projected);
+                asHull = over && projected.traced == null || !faces(t, projected);
                 if (!asHull)
                 {
                     long start = System.nanoTime();
                     projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
                         projected.c, projected.faces, projected.hidden, silhouetteScratch);
+                    projected.tracedFrame = frame;
+                    projected.tracedCenterX = projected.centerX; projected.tracedCenterY = projected.centerY;
+                    projected.tracedWidth = projected.width; projected.tracedHeight = projected.height2d;
                     outlineNanos += System.nanoTime() - start;
                 }
             }
@@ -418,6 +435,28 @@ final class SceneShapeRenderer
         if (!outline.build(px, py, pd, h, cx / h, cy / h, depth, width(t.borderWidth))) { return false; }
         if (offscreen()) { return culled(t.key); }
         return draw(t.key, location, level, t.color, asHull ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
+    }
+
+    /**
+     * Loops traced for one projection, moved and scaled from its bounds (centre and size) to another's: where a model
+     * that walked, or that the camera turned or zoomed on, is now.
+     */
+    static List<float[]> moved(List<float[]> loops, float fromX, float fromY, float fromWidth, float fromHeight,
+        float toX, float toY, float toWidth, float toHeight)
+    {
+        float sx = fromWidth > 0 && toWidth > 0 ? toWidth / fromWidth : 1, sy = fromHeight > 0 && toHeight > 0 ? toHeight / fromHeight : 1;
+        List<float[]> out = new ArrayList<>(loops.size());
+        for (float[] loop : loops)
+        {
+            float[] m = new float[loop.length];
+            for (int i = 0; i < loop.length; i += 2)
+            {
+                m[i] = toX + (loop[i] - fromX) * sx;
+                m[i + 1] = toY + (loop[i + 1] - fromY) * sy;
+            }
+            out.add(m);
+        }
+        return out;
     }
 
     /** Copies a polygon {x0, y0, ...} into px, py and pd at the given depth; returns its number of points. */
@@ -513,6 +552,7 @@ final class SceneShapeRenderer
             minX = Math.min(minX, p.x[i]); maxX = Math.max(maxX, p.x[i]);
             minY = Math.min(minY, p.y[i]); maxY = Math.max(maxY, p.y[i]);
         }
+        p.centerX = (minX + maxX) / 2; p.centerY = (minY + maxY) / 2; p.width = maxX - minX; p.height2d = maxY - minY;
         // Conservative margin includes the widest supported border and its mitres.
         float margin = 64 * pixel;
         int vx = client.getViewportXOffset(), vy = client.getViewportYOffset();

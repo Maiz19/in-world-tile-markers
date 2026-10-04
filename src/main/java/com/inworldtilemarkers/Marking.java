@@ -93,7 +93,7 @@ final class Marking
     /** The colors offered in the color menus after those in use, as RuneLite's marking plugins. */
     private static final Color[] DEFAULT_COLORS = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA};
     /** Set in a profile once the other plugins' marks and options were taken over there. */
-    static final String COPIED = "tookOverMarkingPlugins";
+    static final String COPIED = "tookOverMarkingPlugins3";
     /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
     private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators",
         TILE_INDICATORS = "tileindicators", AGILITY = "agility";
@@ -415,7 +415,9 @@ final class Marking
 
     /**
      * Their option, ours (null: the same name) and their default, per plugin settings group. An option differs from its
-     * default when the player changed it there; only those are taken over. NPC Indicators' one color is every style's.
+     * default when the player changed it there; only those are taken over. NPC Indicators' one color and fill are those of
+     * its tile styles, and of the hull and outline when it had them on (the fifth: its option for the style); otherwise
+     * those keep ours, as does the clickbox, which it does not have ("").
      */
     private static final String[][] SETTINGS = {
         {GROUND_MARKERS, "markerColor", "tileColor", YELLOW}, {GROUND_MARKERS, "fillOpacity", "tileFillOpacity", "50"},
@@ -427,13 +429,13 @@ final class Marking
         {NPC_INDICATORS, "highlightHull", "npcHull", YES}, {NPC_INDICATORS, "highlightTile", "npcTile", NO},
         {NPC_INDICATORS, "highlightTrueTile", "npcTrueTile", NO}, {NPC_INDICATORS, "highlightSouthWestTile", "npcSouthWestTile", NO},
         {NPC_INDICATORS, "highlightSouthWestTrueTile", "npcSouthWestTrueTile", NO}, {NPC_INDICATORS, "highlightOutline", "npcOutline", NO},
-        {NPC_INDICATORS, "npcColor", "npcHullColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcTileColor", CYAN},
+        {NPC_INDICATORS, "npcColor", "npcHullColor", CYAN, "highlightHull"}, {NPC_INDICATORS, "npcColor", "npcTileColor", CYAN},
         {NPC_INDICATORS, "npcColor", "npcTrueTileColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcSouthWestTileColor", CYAN},
-        {NPC_INDICATORS, "npcColor", "npcSouthWestTrueTileColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcOutlineColor", CYAN},
-        {NPC_INDICATORS, "npcColor", "npcClickboxColor", CYAN},
-        {NPC_INDICATORS, "fillColor", "npcHullFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcTileFill", CYAN_FILL},
+        {NPC_INDICATORS, "npcColor", "npcSouthWestTrueTileColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcOutlineColor", CYAN, "highlightOutline"},
+        {NPC_INDICATORS, "npcColor", "npcClickboxColor", CYAN, ""},
+        {NPC_INDICATORS, "fillColor", "npcHullFill", CYAN_FILL, "highlightHull"}, {NPC_INDICATORS, "fillColor", "npcTileFill", CYAN_FILL},
         {NPC_INDICATORS, "fillColor", "npcTrueTileFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcSouthWestTileFill", CYAN_FILL},
-        {NPC_INDICATORS, "fillColor", "npcSouthWestTrueTileFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcClickboxFill", CYAN_FILL},
+        {NPC_INDICATORS, "fillColor", "npcSouthWestTrueTileFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcClickboxFill", CYAN_FILL, ""},
         {NPC_INDICATORS, "borderWidth", "npcBorderWidth", TWO}, {NPC_INDICATORS, "ignoreDeadNpcs", "npcIgnoreDead", YES},
         {NPC_INDICATORS, "ignorePets", "npcIgnorePets", YES},
         {TILE_INDICATORS, "highlightDestinationTile", null, YES}, {TILE_INDICATORS, "highlightDestinationColor", null, "-8355712"},
@@ -493,12 +495,23 @@ final class Marking
         boolean tileIndicators = enabled(PLUGINS[3][2]);
         for (String[] setting : SETTINGS)
         {
+            String ours = setting[2] != null ? setting[2] : setting[1];
+            // A style NPC Indicators did not have on: ours, as its default.
+            if (setting.length > 4 && !styleOn(setting[4])) { configs.unsetConfiguration(InWorldTileMarkersConfig.GROUP, ours); continue; }
             String value = setting[0].equals(TILE_INDICATORS) && !tileIndicators ? null : configs.getConfiguration(setting[0], setting[1]);
             if (value == null || value.equals(setting[3])) { continue; }
-            configs.setConfiguration(InWorldTileMarkersConfig.GROUP, setting[2] != null ? setting[2] : setting[1], value);
+            configs.setConfiguration(InWorldTileMarkersConfig.GROUP, ours, value);
             from.add(setting[0]);
         }
         return from;
+    }
+
+    /** Whether NPC Indicators has this style on (its hull is, unless changed); "" for a style it does not have. */
+    private boolean styleOn(String option)
+    {
+        if (option.isEmpty()) { return false; }
+        String value = configs.getConfiguration(NPC_INDICATORS, option);
+        return "true".equals(value != null ? value : String.valueOf(option.equals("highlightHull")));
     }
 
     /** Whether the plugin of this class is turned on. */
