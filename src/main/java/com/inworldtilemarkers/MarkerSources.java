@@ -62,6 +62,7 @@ final class MarkerSources
     private final InWorldTileMarkersConfig config;
     private final ObjectMarkerSource objectMarkers;
     private final TilePackSource tilePacks;
+    private final AgilitySource agility;
     private final Set<NPC> npcs = Collections.newSetFromMap(new IdentityHashMap<>());
     /** The marked tiles in the scene; drawn in the tile options of the moment (collect). */
     private final List<Ground> ground = new ArrayList<>();
@@ -80,10 +81,10 @@ final class MarkerSources
 
     @Inject
     MarkerSources(Client client, ConfigManager configs, Gson gson, InWorldTileMarkersConfig config, ObjectMarkerSource objectMarkers,
-        TilePackSource tilePacks)
+        TilePackSource tilePacks, AgilitySource agility)
     {
         this.client = client; this.configs = configs; this.gson = gson; this.config = config; this.objectMarkers = objectMarkers;
-        this.tilePacks = tilePacks;
+        this.tilePacks = tilePacks; this.agility = agility;
     }
 
     void rebuild()
@@ -120,12 +121,27 @@ final class MarkerSources
         return new HashMap<>();
     }
 
-    /** A tagged NPC name's own color and style (Tag color, Tag style); null for the options'. */
+    /** NPC Indicators' styles in its Tag style menu's order, then the clickbox; a style's bit is 1 << its index. */
+    static final String[] NPC_STYLES = {"hull", "tile", "truetile", "swtile", "swtruetile", "outline", "clickbox"};
+    static final int HULL = 1, TILE = 2, TRUE_TILE = 4, SW_TILE = 8, SW_TRUE_TILE = 16, OUTLINE = 32, CLICKBOX = 64;
+
+    static int bit(String style) { int i = Arrays.asList(NPC_STYLES).indexOf(style); return i < 0 ? 0 : 1 << i; }
+
+    /** A tagged NPC name's own color and styles (Tag color, Tag style); null and none for the options'. */
     static final class NpcTag
     {
         Color color;
-        /** hull, tile, truetile, swtile, swtruetile or outline, as NPC Indicators' styles. */
+        /** Its own styles (NPC_STYLES), which replace the options' styles. */
+        List<String> styles;
+        /** One style, as an older save kept it. */
         String style;
+
+        int bits()
+        {
+            int bits = bit(style);
+            for (String s : styles == null ? Collections.<String>emptyList() : styles) { bits |= bit(s); }
+            return bits;
+        }
     }
 
     /**
@@ -147,6 +163,7 @@ final class MarkerSources
     {
         ground.clear();
         objectMarkers.clear();
+        agility.clear();
         visible = null;
         visit(client.getTopLevelWorldView());
     }
@@ -176,6 +193,8 @@ final class MarkerSources
                     if (tile == null) { continue; }
                     add(tile.getWallObject()); add(tile.getDecorativeObject()); add(tile.getGroundObject());
                     for (GameObject object : tile.getGameObjects()) { add(object); }
+                    List<TileItem> items = tile.getGroundItems();
+                    for (TileItem item : items == null ? Collections.<TileItem>emptyList() : items) { agility.item(tile, item, true); }
                 }
             }
         }
@@ -243,7 +262,7 @@ final class MarkerSources
                 // and changing floors within a scene does not necessarily trigger a rebuild.
                 LocalPoint local = LocalPoint.fromWorld(wv, instance.getX(), instance.getY());
                 if (local == null) { continue; }
-                ground.add(new Ground(prefix + wv.getId() + ":" + instance, local, instance.getPlane(), p));
+                ground.add(new Ground(prefix + wv.getId() + ":" + instance, local, instance.getPlane(), p, prefix.equals("pack:")));
             }
         }
     }
@@ -253,10 +272,12 @@ final class MarkerSources
         visible = null;
         List<Marker> result = new ArrayList<>();
         Color fill = new Color(0, 0, 0, Math.max(0, Math.min(255, config.tileFillOpacity())));
+        boolean remember = config.rememberTileColors();
         for (Ground g : ground)
         {
-            result.add(layer(Marker.GROUND, new Marker(g.key, g.point, g.plane, 1, 1, g.tile.color == null ? config.tileColor() : g.tile.color,
-                fill, config.tileBorderWidth(), g.tile.label)));
+            // Tile Packs' tiles always keep their pack's colors; marked tiles theirs while Remember tile colors is on.
+            Color color = g.tile.color == null || !remember && !g.pack ? config.tileColor() : g.tile.color;
+            result.add(layer(Marker.GROUND, new Marker(g.key, g.point, g.plane, 1, 1, color, fill, config.tileBorderWidth(), g.tile.label)));
         }
         Player player = client.getLocalPlayer();
         if (player == null) { return new ArrayList<>(); }
@@ -293,24 +314,30 @@ final class MarkerSources
             if (!renderNpc(npc)) { continue; }
             NPCComposition composition = npc.getTransformedComposition();
             if (composition == null || composition.getSize() < 1 || composition.getSize() > 64) { continue; }
-            NpcTag tag = tag(npc);
-            String style = tag == null ? null : tag.style;
+            int styles = styles(npc);
             int size = composition.getSize(), npcPlane = npc.getWorldView().getPlane(), offset = (size - 1) * 64;
             String key = "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex();
             LocalPoint local = npc.getLocalLocation();
             // The true tile only when a style needs it: where the server has the NPC (its south-west tile).
-            WorldPoint server = style(style, "truetile", config.npcTrueTile()) || style(style, "swtruetile", config.npcSouthWestTrueTile())
-                ? npc.getWorldLocation() : null;
+            WorldPoint server = (styles & (TRUE_TILE | SW_TRUE_TILE)) != 0 ? npc.getWorldLocation() : null;
             LocalPoint trueSw = server == null ? null : LocalPoint.fromWorld(npc.getWorldView(), server);
-            Color color = npcColor(npc);
-            if (style(style, "tile", config.npcTile()) && local != null)
-            { result.add(layer(Marker.NPC_TILE, npcMarker(key + ":tile", local, npcPlane, size, color))); }
-            if (style(style, "truetile", config.npcTrueTile()) && trueSw != null)
-            { result.add(layer(Marker.NPC_TILE + 1, npcMarker(key + ":true", trueSw.plus(offset, offset), npcPlane, size, color))); }
-            if (style(style, "swtile", config.npcSouthWestTile()) && local != null)
-            { result.add(layer(Marker.NPC_TILE + 2, npcMarker(key + ":sw", local.plus(-offset, -offset), npcPlane, 1, color))); }
-            if (style(style, "swtruetile", config.npcSouthWestTrueTile()) && trueSw != null)
-            { result.add(layer(Marker.NPC_TILE + 3, npcMarker(key + ":swtrue", trueSw, npcPlane, 1, color))); }
+            if ((styles & TILE) != 0 && local != null)
+            { result.add(layer(Marker.NPC_TILE, npcMarker(key + ":tile", local, npcPlane, size, color(npc, config.npcTileColor()), config.npcTileFill()))); }
+            if ((styles & TRUE_TILE) != 0 && trueSw != null)
+            {
+                result.add(layer(Marker.NPC_TILE + 1, npcMarker(key + ":true", trueSw.plus(offset, offset), npcPlane, size,
+                    color(npc, config.npcTrueTileColor()), config.npcTrueTileFill())));
+            }
+            if ((styles & SW_TILE) != 0 && local != null)
+            {
+                result.add(layer(Marker.NPC_TILE + 2, npcMarker(key + ":sw", local.plus(-offset, -offset), npcPlane, 1,
+                    color(npc, config.npcSouthWestTileColor()), config.npcSouthWestTileFill())));
+            }
+            if ((styles & SW_TRUE_TILE) != 0 && trueSw != null)
+            {
+                result.add(layer(Marker.NPC_TILE + 3, npcMarker(key + ":swtrue", trueSw, npcPlane, 1,
+                    color(npc, config.npcSouthWestTrueTileColor()), config.npcSouthWestTrueTileFill())));
+            }
         }
         // Marked objects' tile style: the stroke is capped at 2, as in Object Markers.
         for (ObjectMarkerSource.Resolved o : visibleObjects())
@@ -319,6 +346,7 @@ final class MarkerSources
             Marker m = footprint("object:" + o.object.getWorldView().getId() + ":" + o.object.getHash() + ":tile", o.object, o.border, o.otherFill, Math.min(o.borderWidth, 2));
             if (m != null) { result.add(m); }
         }
+        agility.tiles(result);
         int distance = drawDistance(config);
         LocalPoint origin = player.getLocalLocation();
         result.removeIf(m -> {
@@ -493,21 +521,32 @@ final class MarkerSources
             : corners(config.hoveredTileCornersOnly(), config.hoveredTileCornerSize(), layer(Marker.HOVER, m));
     }
 
-    private Marker npcMarker(String key, LocalPoint point, int plane, int size, Color color)
-    { return new Marker(key, point, plane, size, size, color, config.npcFillColor(), config.npcBorderWidth(), null); }
-
-    /** A name's own style replaces the styles of the options, as in NPC Indicators. */
-    private static boolean style(String own, String name, boolean configured) { return own != null ? own.equals(name) : configured; }
+    private Marker npcMarker(String key, LocalPoint point, int plane, int size, Color color, Color fill)
+    { return new Marker(key, point, plane, size, size, color, fill, config.npcBorderWidth(), null); }
 
     /** The tag of this NPC's name, or null. */
     private NpcTag tag(NPC npc) { return npcTags.isEmpty() || npc.getName() == null ? null : npcTags.get(Text.standardize(npc.getName())); }
 
-    /** An NPC's highlight color: its name's own (Tag color), else the option's. */
-    Color npcColor(NPC npc)
+    /** An NPC's styles: its name's own (Tag style) replace the options', as in NPC Indicators. */
+    private int styles(NPC npc)
     {
         NpcTag tag = tag(npc);
-        return tag != null && tag.color != null ? tag.color : config.npcColor();
+        int own = tag == null ? 0 : tag.bits();
+        if (own != 0) { return own; }
+        return (config.npcHull() ? HULL : 0) | (config.npcTile() ? TILE : 0) | (config.npcTrueTile() ? TRUE_TILE : 0)
+            | (config.npcSouthWestTile() ? SW_TILE : 0) | (config.npcSouthWestTrueTile() ? SW_TRUE_TILE : 0)
+            | (config.npcOutline() ? OUTLINE : 0) | (config.npcClickbox() ? CLICKBOX : 0);
     }
+
+    /** A style's border color for this NPC: its name's own (Tag color), else the style's. */
+    private Color color(NPC npc, Color style)
+    {
+        NpcTag tag = tag(npc);
+        return tag != null && tag.color != null ? tag.color : style;
+    }
+
+    /** An NPC's outline color, for its 2D fallback. */
+    Color npcOutlineColor(NPC npc) { return color(npc, config.npcOutlineColor()); }
 
     /** Dead NPCs and pets as the options say (NPC Indicators' Ignore dead NPCs and Ignore pets). */
     private boolean renderNpc(NPC npc)
@@ -527,12 +566,13 @@ final class MarkerSources
         for (NPC npc : npcs)
         {
             if (npc.getWorldView() != top || !renderNpc(npc)) { continue; }
-            NpcTag tag = tag(npc);
-            String style = tag == null ? null : tag.style;
-            if (style(style, "outline", config.npcOutline()))
-            { result.add(ModelTarget.npcOutline("npc:" + npc.getIndex() + ":outline", npc, npcColor(npc), config.npcBorderWidth())); }
-            if (style(style, "hull", config.npcHull()))
-            { result.add(ModelTarget.npc("npc:" + npc.getIndex() + ":hull", npc, npcColor(npc), config.npcFillColor(), config.npcBorderWidth())); }
+            int styles = styles(npc);
+            String key = "npc:" + npc.getIndex();
+            double width = config.npcBorderWidth();
+            if ((styles & OUTLINE) != 0) { result.add(ModelTarget.npcOutline(key + ":outline", npc, npcOutlineColor(npc), width)); }
+            if ((styles & HULL) != 0) { result.add(ModelTarget.npc(key + ":hull", npc, color(npc, config.npcHullColor()), config.npcHullFill(), width)); }
+            if ((styles & CLICKBOX) != 0)
+            { result.add(ModelTarget.npcClickbox(key + ":clickbox", npc, color(npc, config.npcClickboxColor()), config.npcClickboxFill(), width, client)); }
         }
         for (ObjectMarkerSource.Resolved o : visibleObjects())
         {
@@ -552,6 +592,7 @@ final class MarkerSources
                 }
             }
         }
+        agility.models(result);
         LocalPoint origin = player.getLocalLocation();
         int distance = drawDistance(config);
         // Each target's distance once: an object's location() is a new LocalPoint per call.
@@ -628,11 +669,7 @@ final class MarkerSources
     List<NPC> npcOutlines()
     {
         List<NPC> result = new ArrayList<>();
-        for (NPC npc : npcs)
-        {
-            NpcTag tag = tag(npc);
-            if (renderNpc(npc) && style(tag == null ? null : tag.style, "outline", config.npcOutline())) { result.add(npc); }
-        }
+        for (NPC npc : npcs) { if (renderNpc(npc) && (styles(npc) & OUTLINE) != 0) { result.add(npc); } }
         return result;
     }
 
@@ -645,8 +682,24 @@ final class MarkerSources
         return false;
     }
 
-    void add(TileObject object) { objectMarkers.check(object); visible = null; }
-    void remove(TileObject object) { objectMarkers.remove(object); visible = null; }
+    void add(TileObject object)
+    {
+        if (object == null) { return; }
+        objectMarkers.check(object);
+        agility.add(object);
+        visible = null;
+    }
+
+    void remove(TileObject object)
+    {
+        if (object == null) { return; }
+        objectMarkers.remove(object);
+        agility.remove(object);
+        visible = null;
+    }
+
+    /** A ground item appeared or went (marks of grace for the agility highlights). */
+    void item(Tile tile, TileItem item, boolean spawned) { if (tile != null && item != null) { agility.item(tile, item, spawned); } }
     void add(NPC npc) { npcs.remove(npc); if (isHighlighted(npc)) { npcs.add(npc); } }
     void remove(NPC npc) { npcs.remove(npc); }
     /** A world view that loaded inside the scene (a boat): its markers, without rebuilding the rest. */
@@ -656,23 +709,28 @@ final class MarkerSources
     {
         if (wv == null) { return; }
         objectMarkers.removeWorldView(wv);
+        agility.removeWorldView(wv);
         npcs.removeIf(n -> n.getWorldView() == wv);
         ground.removeIf(m -> m.point.getWorldView() == wv.getId());
         visible = null;
     }
     void clear() { visible = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
         lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0;
-        ground.clear(); npcs.clear(); objectMarkers.clear(); npcHighlights = Collections.emptyList(); npcTags = Collections.emptyMap(); }
+        ground.clear(); npcs.clear(); objectMarkers.clear(); agility.clear(); npcHighlights = Collections.emptyList(); npcTags = Collections.emptyMap(); }
 
-    /** A marked tile in the scene. */
+    /** A marked tile in the scene, or a Tile Packs pack's (pack). */
     private static final class Ground
     {
         final String key;
         final LocalPoint point;
         final int plane;
         final TilePoint tile;
+        final boolean pack;
 
-        Ground(String key, LocalPoint point, int plane, TilePoint tile) { this.key = key; this.point = point; this.plane = plane; this.tile = tile; }
+        Ground(String key, LocalPoint point, int plane, TilePoint tile, boolean pack)
+        {
+            this.key = key; this.point = point; this.plane = plane; this.tile = tile; this.pack = pack;
+        }
     }
 
     /** A marked tile as saved: Ground Markers' point format. */

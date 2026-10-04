@@ -25,7 +25,8 @@
 /*
  * The Tile Indicators options reuse the option names and descriptions of RuneLite's
  * TileIndicatorsConfig (copyright (c) 2018 Tomas Slusny, BSD 2-Clause; META-INF/LICENSE-runelite), the marking options
- * option names of its GroundMarkerConfig, ObjectIndicatorsConfig and NpcIndicatorsConfig (same license); the path
+ * option names of its GroundMarkerConfig, ObjectIndicatorsConfig and NpcIndicatorsConfig, and the Agility options those
+ * of its AgilityConfig (copyright (c) 2018 Cas; same license); the path
  * options those of Path Marker's PathMarkerConfig (copyright (c) 2022 GeChallengeM, BSD 2-Clause;
  * META-INF/LICENSE-path-marker). See THIRD_PARTY_NOTICES.md.
  */
@@ -56,12 +57,16 @@ public interface InWorldTileMarkersConfig extends Config
     String currentSection = "currentTile";
     @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 5)
     String npcSection = "npcs";
-    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 6)
+    @ConfigSection(name = "NPC styles", description = "The styles of tagged NPCs, each with its own colors; Tag style picks them per name", position = 6)
+    String npcStyleSection = "npcStyles";
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 7)
     String objectSection = "objects";
-    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 7)
+    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 8)
+    String agilitySection = "agility";
+    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 9)
     String activePathSection = "activePath";
 
-    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 8, closedByDefault = true)
+    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 10, closedByDefault = true)
     String hoverPathSection = "hoverPath";
 
     // General
@@ -85,15 +90,18 @@ public interface InWorldTileMarkersConfig extends Config
     default boolean markTiles() { return true; }
 
     @Alpha
-    @ConfigItem(keyName = "tileColor", name = "Tile color", description = "Color of marked tiles. Imported tiles keep their own color", position = 1, section = groundSection)
-    default Color tileColor() { return Color.YELLOW; }
+    @ConfigItem(keyName = "tileColor", name = "Tile color", description = "Color of marked tiles without a color of their own (Color), or of all with Remember tile colors off", position = 1, section = groundSection)
+    default Color tileColor() { return new Color(207, 207, 207); }
 
     @Range(max = 255)
     @ConfigItem(keyName = "tileFillOpacity", name = "Fill opacity", description = "Opacity of the tiles' fill", position = 2, section = groundSection)
     default int tileFillOpacity() { return 50; }
 
     @ConfigItem(keyName = "tileBorderWidth", name = "Border width", description = "Width of the tiles' border", position = 3, section = groundSection)
-    default double tileBorderWidth() { return 2; }
+    default double tileBorderWidth() { return 1.5; }
+
+    @ConfigItem(keyName = "rememberTileColors", name = "Remember tile colors", description = "Tiles keep a color of their own (Color, and tiles from Ground Markers). Off: every tile in the Tile color", position = 6, section = groundSection)
+    default boolean rememberTileColors() { return true; }
 
     @ConfigItem(keyName = "tilePacks", name = "Tile Packs", description = "Also draw the packs turned on in the Tile Packs plugin. Turn Tile Packs itself off once your packs are chosen, or they are drawn twice", position = 4, section = groundSection)
     default boolean tilePacks() { return true; }
@@ -109,39 +117,86 @@ public interface InWorldTileMarkersConfig extends Config
     @ConfigItem(keyName = "npcNames", name = "NPC names", description = "Names of the NPCs to highlight, separated by commas; * matches any text", position = 1, section = npcSection)
     default String npcNames() { return ""; }
 
-    @Alpha
-    @ConfigItem(keyName = "npcColor", name = "Highlight color", description = "Color of the NPC highlight border", position = 2, section = npcSection)
-    default Color npcColor() { return Color.CYAN; }
-
-    @Alpha
-    @ConfigItem(keyName = "npcFillColor", name = "Fill color", description = "Color of the NPC highlight fill", position = 3, section = npcSection)
-    default Color npcFillColor() { return new Color(0, 255, 255, 20); }
-
-    @ConfigItem(keyName = "npcHull", name = "Highlight hull", description = "Highlight the NPC's hull", position = 4, section = npcSection)
+    @ConfigItem(keyName = "npcHull", name = "Highlight hull", description = "Highlight the NPC's hull", position = 0, section = npcStyleSection)
     default boolean npcHull() { return true; }
 
-    @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 5, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcHullColor", name = "Hull color", description = "Border color of the hull", position = 1, section = npcStyleSection)
+    default Color npcHullColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcHullFill", name = "Hull fill", description = "Fill color of the hull", position = 2, section = npcStyleSection)
+    default Color npcHullFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcTile", name = "Highlight tile", description = "Highlight the tiles the NPC stands on", position = 3, section = npcStyleSection)
     default boolean npcTile() { return false; }
 
-    @ConfigItem(keyName = "npcTrueTile", name = "Highlight true tile", description = "Highlight the tiles the NPC is on for the server", position = 6, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcTileColor", name = "Tile color", description = "Border color of the tile", position = 4, section = npcStyleSection)
+    default Color npcTileColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcTileFill", name = "Tile fill", description = "Fill color of the tile", position = 5, section = npcStyleSection)
+    default Color npcTileFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcTrueTile", name = "Highlight true tile", description = "Highlight the tiles the NPC is on for the server", position = 6, section = npcStyleSection)
     default boolean npcTrueTile() { return false; }
 
-    @ConfigItem(keyName = "npcSouthWestTile", name = "Highlight south west tile", description = "Highlight the NPC's south western tile", position = 7, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcTrueTileColor", name = "True tile color", description = "Border color of the true tile", position = 7, section = npcStyleSection)
+    default Color npcTrueTileColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcTrueTileFill", name = "True tile fill", description = "Fill color of the true tile", position = 8, section = npcStyleSection)
+    default Color npcTrueTileFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcSouthWestTile", name = "Highlight south west tile", description = "Highlight the NPC's south western tile", position = 9, section = npcStyleSection)
     default boolean npcSouthWestTile() { return false; }
 
-    @ConfigItem(keyName = "npcSouthWestTrueTile", name = "Highlight south west true tile", description = "Highlight the NPC's south western true tile", position = 8, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcSouthWestTileColor", name = "South west tile color", description = "Border color of the south west tile", position = 10, section = npcStyleSection)
+    default Color npcSouthWestTileColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcSouthWestTileFill", name = "South west tile fill", description = "Fill color of the south west tile", position = 11, section = npcStyleSection)
+    default Color npcSouthWestTileFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcSouthWestTrueTile", name = "Highlight south west true tile", description = "Highlight the NPC's south western true tile", position = 12, section = npcStyleSection)
     default boolean npcSouthWestTrueTile() { return false; }
 
-    @ConfigItem(keyName = "npcOutline", name = "Highlight outline", description = "Highlight the NPC's outline", position = 9, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcSouthWestTrueTileColor", name = "South west true tile color", description = "Border color of the south west true tile", position = 13, section = npcStyleSection)
+    default Color npcSouthWestTrueTileColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcSouthWestTrueTileFill", name = "South west true tile fill", description = "Fill color of the south west true tile", position = 14, section = npcStyleSection)
+    default Color npcSouthWestTrueTileFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcOutline", name = "Highlight outline", description = "Highlight the NPC's outline", position = 15, section = npcStyleSection)
     default boolean npcOutline() { return false; }
 
-    @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 10, section = npcSection)
+    @Alpha
+    @ConfigItem(keyName = "npcOutlineColor", name = "Outline color", description = "Border color of the outline", position = 16, section = npcStyleSection)
+    default Color npcOutlineColor() { return Color.CYAN; }
+
+    @ConfigItem(keyName = "npcClickbox", name = "Highlight clickbox", description = "Highlight the NPC's clickbox", position = 17, section = npcStyleSection)
+    default boolean npcClickbox() { return false; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcClickboxColor", name = "Clickbox color", description = "Border color of the clickbox", position = 18, section = npcStyleSection)
+    default Color npcClickboxColor() { return Color.CYAN; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcClickboxFill", name = "Clickbox fill", description = "Fill color of the clickbox", position = 19, section = npcStyleSection)
+    default Color npcClickboxFill() { return new Color(0, 255, 255, 20); }
+
+    @ConfigItem(keyName = "npcBorderWidth", name = "Border width", description = "Width of the highlight border", position = 2, section = npcSection)
     default double npcBorderWidth() { return 2; }
 
-    @ConfigItem(keyName = "npcIgnoreDead", name = "Ignore dead NPCs", description = "No highlight once an NPC is dead", position = 11, section = npcSection)
+    @ConfigItem(keyName = "npcIgnoreDead", name = "Ignore dead NPCs", description = "No highlight once an NPC is dead", position = 3, section = npcSection)
     default boolean npcIgnoreDead() { return true; }
 
-    @ConfigItem(keyName = "npcIgnorePets", name = "Ignore pets", description = "No highlight on pets", position = 12, section = npcSection)
+    @ConfigItem(keyName = "npcIgnorePets", name = "Ignore pets", description = "No highlight on pets", position = 4, section = npcSection)
     default boolean npcIgnorePets() { return true; }
 
     // Destination tile
@@ -251,7 +306,7 @@ public interface InWorldTileMarkersConfig extends Config
 
     @Alpha
     @ConfigItem(keyName = "objectColor", name = "Marker color", description = "Color of marked objects without a color of their own (Mark border color)", position = 1, section = objectSection)
-    default Color objectColor() { return Color.YELLOW; }
+    default Color objectColor() { return new Color(162, 246, 255); }
 
     @Alpha
     @ConfigItem(keyName = "objectFillColor", name = "Fill color", description = "Fill of marked objects without a fill of their own (Mark fill color). Unset: dark for hulls, a light shade of the border for clickboxes and tiles", position = 2, section = objectSection)
@@ -271,6 +326,52 @@ public interface InWorldTileMarkersConfig extends Config
 
     @ConfigItem(keyName = "objectBorderWidth", name = "Border width", description = "Width of the highlight border", position = 7, section = objectSection)
     default double objectBorderWidth() { return 2; }
+
+    // Agility, as RuneLite's Agility plugin
+
+    @ConfigItem(keyName = "agilityObstacles", name = "Show clickboxes", description = "Show agility course and other obstacle clickboxes", position = 0, section = agilitySection)
+    default boolean agilityObstacles() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "agilityColor", name = "Overlay color", description = "Color of agility obstacles and shortcuts", position = 1, section = agilitySection)
+    default Color agilityColor() { return Color.GREEN; }
+
+    @ConfigItem(keyName = "agilityShortcuts", name = "Highlight agility shortcuts", description = "Highlight agility shortcuts; those above your level in orange", position = 2, section = agilitySection)
+    default boolean agilityShortcuts() { return true; }
+
+    @ConfigItem(keyName = "agilityMarks", name = "Highlight marks of grace", description = "Highlight retrievable marks of grace, and the obstacles in their color while there is one", position = 3, section = agilitySection)
+    default boolean agilityMarks() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "agilityMarkColor", name = "Mark highlight color", description = "Color of highlighted marks of grace", position = 4, section = agilitySection)
+    default Color agilityMarkColor() { return Color.RED; }
+
+    @ConfigItem(keyName = "agilityPortals", name = "Highlight portals", description = "Highlight the Prifddinas portals", position = 5, section = agilitySection)
+    default boolean agilityPortals() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "agilityPortalColor", name = "Portals color", description = "Color of highlighted Prifddinas portals", position = 6, section = agilitySection)
+    default Color agilityPortalColor() { return Color.MAGENTA; }
+
+    @ConfigItem(keyName = "agilityTraps", name = "Show trap overlay", description = "Highlight traps on agility courses", position = 7, section = agilitySection)
+    default boolean agilityTraps() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "agilityTrapColor", name = "Trap overlay color", description = "Color of agility traps", position = 8, section = agilitySection)
+    default Color agilityTrapColor() { return Color.RED; }
+
+    @ConfigItem(keyName = "agilityStick", name = "Highlight stick", description = "Highlight the retrievable stick in the Werewolf Agility Course", position = 9, section = agilitySection)
+    default boolean agilityStick() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "agilityStickColor", name = "Stick highlight color", description = "Color of the highlighted stick", position = 10, section = agilitySection)
+    default Color agilityStickColor() { return Color.RED; }
+
+    @ConfigItem(keyName = "agilitySepulchreObstacles", name = "Highlight Sepulchre obstacles", description = "Highlight pillars and stairs in the Hallowed Sepulchre", position = 11, section = agilitySection)
+    default boolean agilitySepulchreObstacles() { return true; }
+
+    @ConfigItem(keyName = "agilitySepulchreSkilling", name = "Highlight skill challenges", description = "Highlight skilling challenges in the Hallowed Sepulchre", position = 12, section = agilitySection)
+    default boolean agilitySepulchreSkilling() { return true; }
 
     // Path Marker, active path
 

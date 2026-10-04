@@ -102,6 +102,8 @@ final class SceneShapeRenderer
         /** The model's clickbox is its projected bounding box (Model.useBoundingBox), not a union of face rectangles. */
         boolean boundingBox;
         List<float[]> loops;
+        /** The last outline traced, for a frame over the outline budget: a frame old rather than another shape. */
+        List<float[]> traced;
         /** The projected bounding box's convex hull (clickbox bounds), or null; and the clickbox from it. */
         float[] boundsHull;
         List<float[]> clickbox;
@@ -360,14 +362,20 @@ final class SceneShapeRenderer
         boolean asHull = false;
         if (t.outline && projected.loops == null)
         {
-            // Over this frame's budget: a hull border instead of a new trace.
-            asHull = outlineNanos > OUTLINE_BUDGET_NANOS || !faces(t, projected);
-            if (!asHull)
+            // Over this frame's budget: the outline traced last, a frame old, rather than a hull border for a frame
+            // (outlines flipped between the two in a crowd); a hull border only before the first trace.
+            boolean over = outlineNanos > OUTLINE_BUDGET_NANOS;
+            if (over && projected.traced != null) { projected.loops = projected.traced; }
+            else
             {
-                long start = System.nanoTime();
-                projected.loops = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
-                    projected.c, projected.faces, projected.hidden, silhouetteScratch);
-                outlineNanos += System.nanoTime() - start;
+                asHull = over || !faces(t, projected);
+                if (!asHull)
+                {
+                    long start = System.nanoTime();
+                    projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
+                        projected.c, projected.faces, projected.hidden, silhouetteScratch);
+                    outlineNanos += System.nanoTime() - start;
+                }
             }
         }
         if (t.outline && !asHull || t.clickbox)

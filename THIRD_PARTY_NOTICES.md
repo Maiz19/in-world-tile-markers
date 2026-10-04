@@ -2,8 +2,8 @@
 
 ## RuneLite
 
-- Source: https://github.com/runelite/runelite (tag `runelite-parent-1.12.39`; `Marking.java` tag `runelite-parent-1.13.1`)
-- License: BSD 2-Clause, copyright (c) 2017-2018 and 2021 Adam, (c) 2018 Tomas Slusny, TheLonelyDev and James Swindle, (c) 2019 Abex, and the RuneLite contributors. Full text in `src/main/resources/META-INF/LICENSE-runelite`, included in the JAR.
+- Source: https://github.com/runelite/runelite (tag `runelite-parent-1.12.39`; `Marking.java` and `AgilitySource.java` tag `runelite-parent-1.13.1`)
+- License: BSD 2-Clause, copyright (c) 2017-2018 and 2021 Adam, (c) 2018 Tomas Slusny, TheLonelyDev, James Swindle, Cas and SomeoneWithAnInternetConnection, (c) 2019 Abex and MrGroggle, and the RuneLite contributors. Full text in `src/main/resources/META-INF/LICENSE-runelite`, included in the JAR.
 
 These files adapt parts of RuneLite; each names its origin in its header:
 
@@ -12,7 +12,8 @@ These files adapt parts of RuneLite; each names its origin in its header:
 - `Marking.java`: the Shift + right-click options of Ground Markers, Object Markers and NPC Indicators with their colour and style menus, and Ground Markers' import, export and clear (its saved tile format). Taking over the marks and options those plugins saved only reads their settings.
 - `MarkerSources.java`: Ground Markers' point loading and NPC Indicators' name matching, for In-World Tile Markers' own saved marks.
 - `ObjectMarkerSource.java`: Object Markers' matching and display rules, for In-World Tile Markers' own saved marks.
-- `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators, and option names of Ground Markers, Object Markers and NPC Indicators.
+- `AgilitySource.java`: the Agility plugin's obstacle lists (`Obstacles`) and what it highlights in which colors (`AgilityPlugin`, `AgilityOverlay`).
+- `InWorldTileMarkersConfig.java`: the option names and descriptions of Tile Indicators and Agility, and option names of Ground Markers, Object Markers and NPC Indicators.
 
 ## Path Marker
 

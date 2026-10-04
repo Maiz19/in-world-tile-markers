@@ -10,13 +10,13 @@ Hold Shift and right-click:
 
 - **a tile:** Mark or Unmark. A marked tile also has Label and Color (its own colour, or Reset).
 - **an object:** Mark object or Unmark object. A marked object also has Mark border color, Mark fill color and Mark style (hull, outline, clickbox, tile).
-- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. A tagged NPC also has Tag color and Tag style (hull, tile, true tile, south-west tile, south-west true tile, outline), for its name. Names can also be typed into **NPC names**, separated by commas; `*` matches any text (`goblin*`).
+- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. A tagged NPC also has Tag color and Tag style for its name; Tag style turns styles on and off, and a name's own styles replace those in the settings. Names can also be typed into **NPC names**, separated by commas; `*` matches any text (`goblin*`).
 
-The settings hold the colours and styles of marks without their own. These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show.
+The settings hold the colours and styles of marks without their own. Each NPC style (hull, tile, true tile, south-west tile, south-west true tile, outline, clickbox) has its own colour and fill under **NPC styles**. With **Remember tile colors** off, every tile is drawn in the tile colour, as in Ground Markers. These are the same options RuneLite's Ground Markers, Object Markers and NPC Indicators add. With those plugins on as well, both sets of options show.
 
 ### Your marks from Ground Markers, Object Markers and NPC Indicators
 
-The first time In-World Tile Markers starts in a RuneLite profile, it takes over your tiles from Ground Markers, your objects from Object Markers and your names from NPC Indicators, with their own colours and styles. It also takes over the options you changed in those plugins, and in Tile Indicators while it is on, unless you changed the same option here. Their settings are only read, never changed. Turn those plugins off afterwards, or everything is drawn twice.
+The first time In-World Tile Markers starts in a RuneLite profile, it takes over your tiles from Ground Markers, your objects from Object Markers and your names from NPC Indicators, with their own colours and styles. It also takes over the options you changed in those plugins, in Agility, and in Tile Indicators while it is on. Their settings are only read, never changed. Turn those plugins off afterwards, or everything is drawn twice.
 
 NPC Indicators keeps colours and styles per NPC; here they are kept per name.
 
@@ -30,9 +30,14 @@ NPC Indicators keeps colours and styles per NPC; here they are kept per name.
 
 The packs you turned on in the Tile Packs plugin are drawn too (option **Tile Packs**). Turn the Tile Packs plugin off once your packs are chosen: they stay chosen and its own drawing stops. Turn it on again to change them. Your own custom packs always show; packs added to Tile Packs later need an update of In-World Tile Markers.
 
+### Agility
+
+Agility course obstacles, shortcuts (those above your level in orange), Prifddinas portals, traps, marks of grace and the Werewolf course's stick are highlighted as the Agility plugin does, with its options under **Agility**. Turn off the Agility plugin's own highlights (Show clickboxes, Highlight agility shortcuts, Highlight marks of grace), or they are drawn twice; its lap counter keeps working.
+
 ## What it draws
 
 - **Your marks:** tiles with their labels, objects and tagged NPCs.
+- **Agility:** obstacles, shortcuts and marks of grace.
 - **Tile indicators:** the destination, hovered and true tile, each with corners-only, fade-out and colour options.
 - **Paths:** the path you are walking and the path to the hovered tile, in the game world and on the minimap. Running tiles you only pass get their own colour. After a click beyond the loaded area (an HD renderer's extended view), the destination and a predicted path are shown too.
 - **Marks other plugins send**, see below.

@@ -93,10 +93,10 @@ final class Marking
     /** The colors offered in the color menus after those in use, as RuneLite's marking plugins. */
     private static final Color[] DEFAULT_COLORS = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA};
     /** Set in a profile once the other plugins' marks and options were taken over there. */
-    static final String COPIED = "tookOverOtherPlugins";
+    static final String COPIED = "tookOverMarkingPlugins";
     /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
     private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators",
-        TILE_INDICATORS = "tileindicators";
+        TILE_INDICATORS = "tileindicators", AGILITY = "agility";
 
     private final Client client;
     private final ClientThread clientThread;
@@ -406,33 +406,55 @@ final class Marking
         {OBJECT_MARKERS, "Object Markers", "net.runelite.client.plugins.objectindicators.ObjectIndicatorsPlugin"},
         {NPC_INDICATORS, "NPC Indicators", "net.runelite.client.plugins.npchighlight.NpcIndicatorsPlugin"},
         {TILE_INDICATORS, "Tile Indicators", "net.runelite.client.plugins.tileindicators.TileIndicatorsPlugin"},
+        {AGILITY, "Agility", "net.runelite.client.plugins.agility.AgilityPlugin"},
     };
 
-    /** Their option and ours, per plugin settings group: the same option, where ours has a name of its own. */
+    /** Saved forms of the defaults below: booleans, colors (ARGB) and widths as RuneLite saves them. */
+    private static final String YES = "true", NO = "false", TWO = "2.0", YELLOW = "-256", CYAN = "-16711681", CYAN_FILL = "335609855",
+        BLACK_FILL = "838860800", RED = "-65536";
+
+    /**
+     * Their option, ours (null: the same name) and their default, per plugin settings group. An option differs from its
+     * default when the player changed it there; only those are taken over. NPC Indicators' one color is every style's.
+     */
     private static final String[][] SETTINGS = {
-        {GROUND_MARKERS, "markerColor", "tileColor"}, {GROUND_MARKERS, "fillOpacity", "tileFillOpacity"},
-        {GROUND_MARKERS, "borderWidth", "tileBorderWidth"},
-        {OBJECT_MARKERS, "markerColor", "objectColor"}, {OBJECT_MARKERS, "fillColor", "objectFillColor"},
-        {OBJECT_MARKERS, "highlightHull", "objectHull"}, {OBJECT_MARKERS, "highlightOutline", "objectOutline"},
-        {OBJECT_MARKERS, "highlightClickbox", "objectClickbox"}, {OBJECT_MARKERS, "highlightTile", "objectTile"},
-        {OBJECT_MARKERS, "borderWidth", "objectBorderWidth"},
-        {NPC_INDICATORS, "npcColor", "npcColor"}, {NPC_INDICATORS, "fillColor", "npcFillColor"},
-        {NPC_INDICATORS, "highlightHull", "npcHull"}, {NPC_INDICATORS, "highlightTile", "npcTile"},
-        {NPC_INDICATORS, "highlightTrueTile", "npcTrueTile"}, {NPC_INDICATORS, "highlightSouthWestTile", "npcSouthWestTile"},
-        {NPC_INDICATORS, "highlightSouthWestTrueTile", "npcSouthWestTrueTile"}, {NPC_INDICATORS, "highlightOutline", "npcOutline"},
-        {NPC_INDICATORS, "borderWidth", "npcBorderWidth"}, {NPC_INDICATORS, "ignoreDeadNpcs", "npcIgnoreDead"},
-        {NPC_INDICATORS, "ignorePets", "npcIgnorePets"},
-        {TILE_INDICATORS, "highlightDestinationTile", null}, {TILE_INDICATORS, "highlightDestinationColor", null},
-        {TILE_INDICATORS, "destinationTileFillColor", null}, {TILE_INDICATORS, "destinationTileBorderWidth", null},
-        {TILE_INDICATORS, "highlightHoveredTile", null}, {TILE_INDICATORS, "highlightHoveredColor", null},
-        {TILE_INDICATORS, "hoveredTileFillColor", null}, {TILE_INDICATORS, "hoveredTileBorderWidth", null},
-        {TILE_INDICATORS, "highlightCurrentTile", null}, {TILE_INDICATORS, "highlightCurrentColor", null},
-        {TILE_INDICATORS, "currentTileFillColor", null}, {TILE_INDICATORS, "currentTileBorderWidth", null},
+        {GROUND_MARKERS, "markerColor", "tileColor", YELLOW}, {GROUND_MARKERS, "fillOpacity", "tileFillOpacity", "50"},
+        {GROUND_MARKERS, "borderWidth", "tileBorderWidth", TWO}, {GROUND_MARKERS, "rememberTileColors", null, YES},
+        {OBJECT_MARKERS, "markerColor", "objectColor", YELLOW}, {OBJECT_MARKERS, "fillColor", "objectFillColor", null},
+        {OBJECT_MARKERS, "highlightHull", "objectHull", YES}, {OBJECT_MARKERS, "highlightOutline", "objectOutline", NO},
+        {OBJECT_MARKERS, "highlightClickbox", "objectClickbox", NO}, {OBJECT_MARKERS, "highlightTile", "objectTile", NO},
+        {OBJECT_MARKERS, "borderWidth", "objectBorderWidth", TWO},
+        {NPC_INDICATORS, "highlightHull", "npcHull", YES}, {NPC_INDICATORS, "highlightTile", "npcTile", NO},
+        {NPC_INDICATORS, "highlightTrueTile", "npcTrueTile", NO}, {NPC_INDICATORS, "highlightSouthWestTile", "npcSouthWestTile", NO},
+        {NPC_INDICATORS, "highlightSouthWestTrueTile", "npcSouthWestTrueTile", NO}, {NPC_INDICATORS, "highlightOutline", "npcOutline", NO},
+        {NPC_INDICATORS, "npcColor", "npcHullColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcTileColor", CYAN},
+        {NPC_INDICATORS, "npcColor", "npcTrueTileColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcSouthWestTileColor", CYAN},
+        {NPC_INDICATORS, "npcColor", "npcSouthWestTrueTileColor", CYAN}, {NPC_INDICATORS, "npcColor", "npcOutlineColor", CYAN},
+        {NPC_INDICATORS, "npcColor", "npcClickboxColor", CYAN},
+        {NPC_INDICATORS, "fillColor", "npcHullFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcTileFill", CYAN_FILL},
+        {NPC_INDICATORS, "fillColor", "npcTrueTileFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcSouthWestTileFill", CYAN_FILL},
+        {NPC_INDICATORS, "fillColor", "npcSouthWestTrueTileFill", CYAN_FILL}, {NPC_INDICATORS, "fillColor", "npcClickboxFill", CYAN_FILL},
+        {NPC_INDICATORS, "borderWidth", "npcBorderWidth", TWO}, {NPC_INDICATORS, "ignoreDeadNpcs", "npcIgnoreDead", YES},
+        {NPC_INDICATORS, "ignorePets", "npcIgnorePets", YES},
+        {TILE_INDICATORS, "highlightDestinationTile", null, YES}, {TILE_INDICATORS, "highlightDestinationColor", null, "-8355712"},
+        {TILE_INDICATORS, "destinationTileFillColor", null, BLACK_FILL}, {TILE_INDICATORS, "destinationTileBorderWidth", null, TWO},
+        {TILE_INDICATORS, "highlightHoveredTile", null, NO}, {TILE_INDICATORS, "highlightHoveredColor", null, "0"},
+        {TILE_INDICATORS, "hoveredTileFillColor", null, BLACK_FILL}, {TILE_INDICATORS, "hoveredTileBorderWidth", null, TWO},
+        {TILE_INDICATORS, "highlightCurrentTile", null, NO}, {TILE_INDICATORS, "highlightCurrentColor", null, CYAN},
+        {TILE_INDICATORS, "currentTileFillColor", null, BLACK_FILL}, {TILE_INDICATORS, "currentTileBorderWidth", null, TWO},
+        {AGILITY, "showClickboxes", "agilityObstacles", YES}, {AGILITY, "overlayColor", "agilityColor", "-16711936"},
+        {AGILITY, "highlightShortcuts", "agilityShortcuts", YES}, {AGILITY, "highlightMarks", "agilityMarks", YES},
+        {AGILITY, "markHighlight", "agilityMarkColor", RED}, {AGILITY, "highlightPortals", "agilityPortals", YES},
+        {AGILITY, "portalsHighlight", "agilityPortalColor", "-65281"}, {AGILITY, "trapOverlay", "agilityTraps", YES},
+        {AGILITY, "trapHighlight", "agilityTrapColor", RED}, {AGILITY, "highlightStick", "agilityStick", YES},
+        {AGILITY, "stickHighlightColor", "agilityStickColor", RED},
+        {AGILITY, "highlightSepulchreObstacles", "agilitySepulchreObstacles", YES},
+        {AGILITY, "highlightSepulchreSkilling", "agilitySepulchreSkilling", YES},
     };
 
     /**
      * The first start in a profile: the marks of Ground Markers, Object Markers and NPC Indicators are copied over, and
-     * the options changed in those plugins (and in Tile Indicators while it is on) where ours are unchanged.
+     * the options changed in those plugins, in Agility and in Tile Indicators while it is on.
      */
     private void copyOnce()
     {
@@ -452,7 +474,8 @@ final class Marking
         {
             if (!from.contains(plugin[0])) { continue; }
             plugins.add(plugin[1]);
-            if (enabled(plugin[2])) { on.add(plugin[1]); }
+            // The Agility plugin keeps its lap counter; its own highlights get a notice of their own (the plugin's checkAgility).
+            if (enabled(plugin[2]) && !plugin[0].equals(AGILITY)) { on.add(plugin[1]); }
         }
         String marks = describe(tiles, objectCount, names);
         notice("In-World Tile Markers took over your marks and settings from " + list(plugins) + (marks == null ? "" : " (" + marks + ")") + "."
@@ -460,17 +483,19 @@ final class Marking
             + " Sync on the world map orb copies what you mark there later.");
     }
 
-    /** The options changed in RuneLite's marking plugins, where ours are unchanged; returns their settings groups. */
+    /**
+     * The options the player changed in RuneLite's marking plugins (and Tile Indicators' while it is on) become ours;
+     * returns their settings groups. RuneLite saves every option's default, so a changed one is one that differs from it.
+     */
     private Set<String> copySettings()
     {
         Set<String> from = new HashSet<>();
         boolean tileIndicators = enabled(PLUGINS[3][2]);
         for (String[] setting : SETTINGS)
         {
-            String ours = setting[2] != null ? setting[2] : setting[1];
             String value = setting[0].equals(TILE_INDICATORS) && !tileIndicators ? null : configs.getConfiguration(setting[0], setting[1]);
-            if (value == null || configs.getConfiguration(InWorldTileMarkersConfig.GROUP, ours) != null) { continue; }
-            configs.setConfiguration(InWorldTileMarkersConfig.GROUP, ours, value);
+            if (value == null || value.equals(setting[3])) { continue; }
+            configs.setConfiguration(InWorldTileMarkersConfig.GROUP, setting[2] != null ? setting[2] : setting[1], value);
             from.add(setting[0]);
         }
         return from;
@@ -599,8 +624,8 @@ final class Marking
         {
             String name = npcName(id);
             String style = name == null ? null : configs.getConfiguration(NPC_INDICATORS, "tagstyle_" + id);
-            MarkerSources.NpcTag tag = !Arrays.asList(STYLES).contains(style) ? null : tags.computeIfAbsent(name, k -> new MarkerSources.NpcTag());
-            if (tag != null && tag.style == null) { tag.style = style; added++; }
+            MarkerSources.NpcTag tag = MarkerSources.bit(style) == 0 ? null : tags.computeIfAbsent(name, k -> new MarkerSources.NpcTag());
+            if (tag != null && tag.bits() == 0) { tag.styles = new ArrayList<>(Collections.singletonList(style)); added++; }
         }
         if (added > 0) { saveNpcTags(tags); }
         return added;
@@ -782,8 +807,8 @@ final class Marking
         if (tagged || pattern) { npcMenus(event.getTarget(), name); }
     }
 
-    private static final String[] STYLE_NAMES = {"Hull", "Tile", "True tile", "South-west tile", "South-west true tile", "Outline"};
-    private static final String[] STYLES = {"hull", "tile", "truetile", "swtile", "swtruetile", "outline"};
+    /** The names of MarkerSources.NPC_STYLES in the Tag style menu, as NPC Indicators'. */
+    private static final String[] STYLE_NAMES = {"Hull", "Tile", "True tile", "South-west tile", "South-west true tile", "Outline", "Clickbox"};
 
     /** NPC Indicators' Tag color and Tag style menus, per name. */
     private void npcMenus(String target, String name)
@@ -799,20 +824,27 @@ final class Marking
                 .onClick(e -> updateNpc(name, t -> t.color = c));
         }
         colors.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE)
-            .onClick(e -> pick(own != null && own.color != null ? own.color : config.npcColor(), "Tag Color", c -> updateNpc(name, t -> t.color = c)));
+            .onClick(e -> pick(own != null && own.color != null ? own.color : Color.WHITE, "Tag Color", c -> updateNpc(name, t -> t.color = c)));
         if (own != null && own.color != null)
         {
             colors.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.color = null));
         }
         Menu styles = client.getMenu().createMenuEntry(-3).setOption("Tag style").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
-        for (int i = 0; i < STYLES.length; i++)
+        // Each turns a style of the name's own on or off; its own styles replace the options'.
+        for (int i = 0; i < STYLE_NAMES.length; i++)
         {
-            String style = STYLES[i];
-            styles.createMenuEntry(0).setOption(STYLE_NAMES[i]).setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.style = style));
+            String style = MarkerSources.NPC_STYLES[i];
+            styles.createMenuEntry(0).setOption(STYLE_NAMES[i]).setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> {
+                List<String> on = new ArrayList<>();
+                for (String s : MarkerSources.NPC_STYLES) { if ((t.bits() & MarkerSources.bit(s)) != 0) { on.add(s); } }
+                if (!on.remove(style)) { on.add(style); }
+                t.styles = on;
+                t.style = null;
+            }));
         }
-        if (own != null && own.style != null)
+        if (own != null && own.bits() != 0)
         {
-            styles.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.style = null));
+            styles.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> { t.styles = null; t.style = null; }));
         }
     }
 
@@ -823,7 +855,7 @@ final class Marking
         String key = Text.standardize(name);
         MarkerSources.NpcTag tag = tags.computeIfAbsent(key, k -> new MarkerSources.NpcTag());
         change.accept(tag);
-        if (tag.color == null && tag.style == null) { tags.remove(key); }
+        if (tag.color == null && tag.bits() == 0) { tags.remove(key); }
         saveNpcTags(tags);
     }
 

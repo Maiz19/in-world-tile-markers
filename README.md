@@ -12,6 +12,6 @@ Left: RuneLite's normal markers in Stretched Mode. Right: In-World Tile Markers.
 | ![Tiles before](docs/images/tiles-before.png) | ![Tiles after](docs/images/tiles-after.png) |
 | ![Clickbox before](docs/images/clickbox-before.png) | ![Clickbox after](docs/images/clickbox-after.png) |
 
-Mark tiles, objects and NPCs with Shift + right-click, as with RuneLite's Ground Markers, Object Markers and NPC Indicators. Your marks from those plugins are copied over on the first start, and the packs you turned on in Tile Packs are drawn too. It also draws your destination, hovered and current tile and the path you walk, and other plugins can send it marks to draw.
+Mark tiles, objects and NPCs with Shift + right-click, as with RuneLite's Ground Markers, Object Markers and NPC Indicators. Your marks from those plugins are copied over on the first start, and the packs you turned on in Tile Packs are drawn too. It also draws agility obstacles, shortcuts and marks of grace, your destination, hovered and current tile and the path you walk, and other plugins can send it marks to draw.
 
 [Guide](docs/GUIDE.md) · [Credits](THIRD_PARTY_NOTICES.md) · [License](LICENSE)

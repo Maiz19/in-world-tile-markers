@@ -70,7 +70,7 @@ final class PlayerSilhouette
             hidden[f] = skip[f] || (px[j] - px[i]) * (py[k] - py[i]) - (py[j] - py[i]) * (px[k] - px[i]) >= 0;
         }
         // One cell per pixel: half the points of the finer trace, and so about half the pieces marks are cut into.
-        cut = PlayerCut.of(Silhouette.trace(px, py, a, b, c, faces, hidden, scratch, 1));
+        cut = PlayerCut.of(Silhouette.trace(px, py, a, b, c, faces, hidden, scratch, 1, false));
         return cut;
     }
 }

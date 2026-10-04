@@ -38,6 +38,7 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Inject private MarkerSources sources;
     @Inject private ObjectMarkerSource objectMarkers;
     @Inject private TilePackSource tilePacks;
+    @Inject private AgilitySource agility;
     @Inject private SceneShapeRenderer renderer;
     @Inject private PathTracker paths;
     @Inject private ExternalMarks externalMarks;
@@ -128,7 +129,7 @@ public class InWorldTileMarkersPlugin extends Plugin
                 marksChanged = false;
                 objectMarkers.clearPoints();
                 tilePacks.clear();
-                if (!dirty) { sources.reloadMarks(); checkTilePacks(); }
+                if (!dirty) { sources.reloadMarks(); checkTilePacks(); checkAgility(); }
             }
             if (npcsChanged)
             {
@@ -137,7 +138,7 @@ public class InWorldTileMarkersPlugin extends Plugin
                 if (!dirty) { sources.refreshNpcs(); }
             }
             // Not while the marks rest after a failure: the scene is read again when they are tried again.
-            if (dirty && !failed()) { rebuild(); checkTilePacks(); }
+            if (dirty && !failed()) { rebuild(); checkTilePacks(); checkAgility(); }
             List<Marker> tiles = sources.collect(pathTiles());
             List<ModelTarget> models = sources.modelTargets();
             // Marks other plugins sent through PluginMessage.
@@ -440,6 +441,21 @@ public class InWorldTileMarkersPlugin extends Plugin
     private static final String TILE_PACKS = "com.tilepacks.TilePacksPlugin";
     private boolean tilePacksChecked;
 
+    private static final String AGILITY = "net.runelite.client.plugins.agility.AgilityPlugin";
+    private boolean agilityChecked;
+
+    /** The Agility plugin draws its clickboxes too while they are on: the player is told once to turn them off. */
+    private void checkAgility()
+    {
+        if (!agilityChecked && config.agilityObstacles() && agility.any() && active(AGILITY)
+            && !"false".equals(configManager.getConfiguration("agility", "showClickboxes")))
+        {
+            agilityChecked = true;
+            marking.noticeOnce("noticedAgility", "In-World Tile Markers draws agility obstacles too. Turn off the Agility plugin's"
+                + " Show clickboxes, Highlight agility shortcuts and Highlight marks of grace, or they are drawn twice.");
+        }
+    }
+
     /** Tile Packs draws the packs too while it runs: the player is told once to turn it off. */
     private void checkTilePacks()
     {
@@ -463,6 +479,8 @@ public class InWorldTileMarkersPlugin extends Plugin
     @Subscribe public void onDecorativeObjectDespawned(DecorativeObjectDespawned e) { sources.remove(e.getDecorativeObject()); }
     @Subscribe public void onGroundObjectSpawned(GroundObjectSpawned e) { sources.add(e.getGroundObject()); }
     @Subscribe public void onGroundObjectDespawned(GroundObjectDespawned e) { sources.remove(e.getGroundObject()); }
+    @Subscribe public void onItemSpawned(ItemSpawned e) { sources.item(e.getTile(), e.getItem(), true); }
+    @Subscribe public void onItemDespawned(ItemDespawned e) { sources.item(e.getTile(), e.getItem(), false); }
 
     List<Marker> markers() { return markers; }
     List<ModelTarget> modelTargets() { return modelTargets; }
