@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -8,7 +8,7 @@ import net.runelite.api.ModelData;
 import net.runelite.api.gameval.ItemID;
 
 /**
- * Allocates models whose arrays In-World Tile Markers owns and rewrites. The public API cannot
+ * Allocates models whose arrays HD World Markers owns and rewrites. The public API cannot
  * allocate an empty model, so copies of a small cache mesh are merged and all
  * of their geometry is replaced; no item is ever displayed.
  */
@@ -103,6 +103,10 @@ final class CarrierModels
         if (model == null || model.getVerticesCount() < vertices || model.getFaceCount() < faces
             || model.getFaceTransparencies() == null) { return null; }
         for (int f = 0; f < model.getFaceCount(); f++) { FlatModel.hide(model, f); }
+        // The seed's faces have render priorities (two of them 1), which renderers sort by before depth: whatever face of
+        // a mark came to lie in such a slot was drawn over every other mark, another one each frame as shapes changed.
+        byte[] priorities = model.getFaceRenderPriorities();
+        if (priorities != null) { java.util.Arrays.fill(priorities, (byte) 0); }
         float[] x = model.getVerticesX(), y = model.getVerticesY(), z = model.getVerticesZ();
         java.util.Arrays.fill(x, 0);
         java.util.Arrays.fill(y, 0);

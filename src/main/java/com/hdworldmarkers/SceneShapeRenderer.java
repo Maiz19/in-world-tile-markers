@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import java.awt.Color;
 import java.util.*;
@@ -40,8 +40,13 @@ final class SceneShapeRenderer
      */
     private final Map<Object, Projection> projections = new IdentityHashMap<>();
     private int frame;
-    /** New outline traces per frame are limited to this much time; the rest are drawn as hulls. */
-    private static final long OUTLINE_BUDGET_NANOS = 2_500_000;
+    /**
+     * New outline traces per frame are limited to this much time; the rest move their last trace along (see model). A
+     * real NPC model takes about half a millisecond, so a few are traced every frame and a crowd each every few frames.
+     */
+    private static final long OUTLINE_BUDGET_NANOS = 1_500_000;
+    /** Frames an outline's last trace may stand in for a new one over the budget; then it is traced anyway. */
+    static final int STALE_OUTLINE_FRAMES = 2;
     private long outlineNanos;
 
     /** Models no scene object uses now, kept for the next ones: making and uploading a model costs. */
@@ -102,6 +107,15 @@ final class SceneShapeRenderer
         /** The model's clickbox is its projected bounding box (Model.useBoundingBox), not a union of face rectangles. */
         boolean boundingBox;
         List<float[]> loops;
+        /**
+         * The last outline traced, for a frame over the outline budget, and the frame and the projected points' bounds it
+         * was traced for (centre and size): moved to the bounds of now rather than another shape.
+         */
+        List<float[]> traced;
+        int tracedFrame;
+        float tracedCenterX, tracedCenterY, tracedWidth, tracedHeight;
+        /** The projected points' bounds: centre and size. */
+        float centerX, centerY, width, height2d;
         /** The projected bounding box's convex hull (clickbox bounds), or null; and the clickbox from it. */
         float[] boundsHull;
         List<float[]> clickbox;
@@ -162,15 +176,18 @@ final class SceneShapeRenderer
     private LocalPoint xrayAnchor;
     private int xrayLevel, xrayHeight;
     /**
-     * Depth of the top layer's through-walls points. 117 HD draws see-through faces without writing depth, sorted
-     * by their distance in whole units (ties in face order), and fully opaque faces apart, before them, with depth
-     * test and writes. It sorts with the client's integer camera, while the marks follow the exact camera: moving,
-     * the two differ by up to about a unit. Each lower layer (a white layer is half of one) sits XRAY_LAYER_DEPTH
-     * farther, well beyond that, so both passes keep the ranking whatever the camera does; within a layer the face
-     * order (see end) decides.
+     * Depth of the top layer's through-walls points. 117 HD draws see-through faces without writing depth, sorted by
+     * their distance in whole units (ties in face order), and fully opaque faces apart, before them, with depth test
+     * and writes. It sorts with the client's whole-unit camera, while the marks follow the exact camera; where faces
+     * overlap on the screen they lie on one ray, so that difference moves them alike. Each lower layer sits
+     * XRAY_LAYER_DEPTH farther (a light colour's white layer half a step nearer than the colour): a whole unit or more
+     * apart they keep the ranking, and in one unit the face order does (lowest rank first, white after its colour). The
+     * top layer starts just beyond XRAY_MIN_DEPTH and the layer bias (XRAY_LAYER_SPAN), in the middle of a unit.
+     * Whatever is nearer the camera than the marks covers them, such as a wall or object right in front of a low camera
+     * (at 200, a quarter of the camera angles around a walled room hid marks), so all layers lie close together.
      */
-    private static final float XRAY_DEPTH = 200.5f;
-    private static final float XRAY_LAYER_DEPTH = 6, XRAY_TOP_LAYER = 20;
+    private static final float XRAY_DEPTH = 115.5f;
+    private static final float XRAY_LAYER_DEPTH = 2, XRAY_TOP_LAYER = 20;
     /**
      * Objects of one bucket key sit at the same place, so the renderer's order among them (by distance to the
      * camera) is undecided: each object with higher ranks after it hangs this much lower, thus farther away. At the
@@ -178,12 +195,15 @@ final class SceneShapeRenderer
      */
     private static final int PART_STEP = 32;
     /**
-     * Nearest depth of a through-walls vertex: the GPU plugin skips a see-through model whole if any vertex is
-     * nearer than 50 (ModelUploader.uploadSortedModel), with its own camera, which may differ slightly.
+     * Nearest depth of a through-walls vertex. 117 HD clips what is nearer the camera than twice its near plane of 50:
+     * its reverse-Z projection (Mat4.perspectiveInfiniteReverseZ) gives clip z 2 x 50 over clip w the depth, so the
+     * current and destination tile, pulled to 91 and 97, were not drawn at all. Its camera is the one the marks follow;
+     * the GPU plugin, whose own camera may differ slightly, skips a see-through model whole if any vertex is nearer than
+     * 50 (ModelUploader.uploadSortedModel).
      */
-    private static final float XRAY_MIN_DEPTH = ModelShapes.NEAR + 30;
-    /** Depth taken by the layer bias (0.25 per layer, up to HULL_LAYER + 3 = 17 and a white layer), above XRAY_MIN_DEPTH. */
-    private static final float XRAY_LAYER_SPAN = 4.5f;
+    private static final float XRAY_MIN_DEPTH = 2 * ModelShapes.NEAR + 10;
+    /** Depth taken by the layer bias (0.25 per layer, up to Marker.CURRENT = 18 and a white layer), above XRAY_MIN_DEPTH. */
+    private static final float XRAY_LAYER_SPAN = 5;
     /*
      * The GPU plugin draws nothing of a see-through model whose diameter is 6000 or more
      * (ModelUploader.uploadSortedModel; Zone.renderAlpha likewise). Carrier bounds are six extreme
@@ -200,7 +220,12 @@ final class SceneShapeRenderer
      */
     private static final int XRAY_CAMERA = XRAY_REACH - 700;
     private float[] tx = new float[64], ty = new float[64], tz = new float[64];
-    static final int HULL_LAYER = 14;
+    /**
+     * Layers of model marks, each drawn over the one before where they overlap: clickboxes, hulls, outlines. One layer
+     * for all three left their order to the renderer's sort, which drew an NPC's outline over its clickbox in one frame
+     * and under it in the next.
+     */
+    static final int CLICKBOX_LAYER = 14, HULL_LAYER = 15, OUTLINE_LAYER = 16;
 
     @Inject
     SceneShapeRenderer(Client client, CarrierModels carriers) { this.client = client; this.carriers = carriers; }
@@ -244,12 +269,10 @@ final class SceneShapeRenderer
         if (unavailable || m.point.getWorldView() != wv.getId()) { return false; }
         if ((m.borderWidth <= 0 || m.color.getAlpha() == 0) && m.fill.getAlpha() == 0) { return culled(m.key); }
         layer = m.layer;
-        LocalPoint at = m.where();
+        LocalPoint at = m.point;
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
         int height = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
-        if (m.dot || m.offX != null) { return screen(m, at, level, height); }
-        if (m.quadX != null) { return quad(wv, m, at, level, height); }
-        if (m.lineX != null) { return line(wv, m, at, level); }
+        if (m.dot || m.offX != null) { return facing(m, at, level, height); }
         int w = m.width, h = m.height, n = 2 * (w + h);
         ensure(n);
         int x0 = at.getX() - w * 64, y0 = at.getY() - h * 64, k = 0;
@@ -258,7 +281,15 @@ final class SceneShapeRenderer
         for (int j = 0; j < h; j++) { k = sample(wv, level, x0 + w * 128, y0 + j * 128, k); }
         for (int i = w; i > 0; i--) { k = sample(wv, level, x0 + i * 128, y0 + h * 128, k); }
         for (int j = h; j > 0; j--) { k = sample(wv, level, x0, y0 + j * 128, k); }
-        boolean built = k >= 0 && around(at, height, n, m.borderWidth);
+        if (k < 0)
+        {
+            // Wholly behind the camera: RuneLite's 2D tile is nothing either, so the overlay need not try it every frame.
+            camera.project(at.getX(), at.getY(), height, point);
+            return point[2] < ModelShapes.NEAR - 64 * (w + h) - 1024 ? culled(m.key) : false;
+        }
+        // Off screen by its corners alone (a tile's border and mitres stay within a few widths of them): not built.
+        if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
+        boolean built = around(at, height, n, m.borderWidth);
         if (m.cornerDivisor <= 0) { return shape(m, at, level, built, m.fill); }
         if (!built || oversized()) { return false; }
         if (offscreen()) { return culled(m.key); }
@@ -270,8 +301,8 @@ final class SceneShapeRenderer
 
     /**
      * The four corner lines of a footprint, each 1/divisor of its side along the
-     * projected perimeter, as Corner Tile Indicators' and Better NPC Highlight's
-     * renderPolygonCorners do on screen.
+     * projected perimeter, as Corner Tile Indicators' renderPolygonCorners
+     * does on screen.
      */
     private void corners(Marker m, LocalPoint at, int w, int h, int level)
     {
@@ -312,46 +343,23 @@ final class SceneShapeRenderer
         return draw(m.key, at, level, m.color, fill, m.borderWidth > 0);
     }
 
-    /** A free quadrilateral on the ground, each side sampled in four steps to follow the terrain. */
-    private boolean quad(WorldView wv, Marker m, LocalPoint at, int level, int height)
-    {
-        int steps = 4, n = 4 * steps, k = 0;
-        ensure(n);
-        for (int c = 0; c < 4 && k >= 0; c++)
-        {
-            int x0 = m.quadX[c], y0 = m.quadY[c], x1 = m.quadX[(c + 1) % 4], y1 = m.quadY[(c + 1) % 4];
-            for (int s = 0; s < steps && k >= 0; s++)
-            {
-                int x = x0 + (x1 - x0) * s / steps, y = y0 + (y1 - y0) * s / steps;
-                k = sample(wv, level, Math.max(0, x), Math.max(0, y), k);
-            }
-        }
-        return shape(m, at, level, k >= 0 && around(at, height, n, m.borderWidth), m.fill);
-    }
-
-    /** An open polyline on the ground, each vertex at the terrain height of its own point. */
-    private boolean line(WorldView wv, Marker m, LocalPoint at, int level)
-    {
-        int n = m.lineX.length, k = 0;
-        if (n < 2 || m.borderWidth <= 0) { return false; }
-        ensure(n);
-        for (int i = 0; i < n && k >= 0; i++) { k = sample(wv, level, Math.max(0, m.lineX[i]), Math.max(0, m.lineY[i]), k); }
-        return shape(m, at, level, k >= 0 && outline.buildStrip(px, py, pd, n, width(m.borderWidth)), Marker.NO_FILL);
-    }
-
     /** Path Marker's dot style: an 8 pixel circle. */
     static final float[] DOT_X = new float[16], DOT_Y = new float[16];
     static { for (int i = 0; i < 16; i++) { DOT_X[i] = (float) Math.cos(i * Math.PI / 8) * 4; DOT_Y[i] = (float) Math.sin(i * Math.PI / 8) * 4; } }
 
-    /** A shape on the screen around the marker's point (Marker.offX, or the dot), in pixels or as part of the world. */
-    private boolean screen(Marker m, LocalPoint at, int level, int height)
+    /** The dot around the tile's centre, its size in screen pixels. */
+    /**
+     * A shape standing towards the camera around where the marker's point projects: Path Marker's dot in pixels, or a
+     * timer pie (Marker.offX) in local units, scaled by the camera at its depth.
+     */
+    private boolean facing(Marker m, LocalPoint at, int level, int height)
     {
-        float[] ox = m.dot ? DOT_X : m.offX, oy = m.dot ? DOT_Y : m.offY;
+        float[] ox = m.offX != null ? m.offX : DOT_X, oy = m.offX != null ? m.offY : DOT_Y;
         int n = ox.length;
         ensure(n);
         camera.project(at.getX(), at.getY(), height - m.lift, point);
         if (!(point[2] >= PARTIAL_NEAR)) { return false; }
-        float scale = m.dot ? pixel : m.worldSized ? camera.scale / point[2] : 1;
+        float scale = m.offX != null ? camera.scale / point[2] : pixel;
         for (int i = 0; i < n; i++) { px[i] = point[0] + ox[i] * scale; py[i] = point[1] + oy[i] * scale; pd[i] = point[2]; }
         return shape(m, at, level, outline.buildPolygon(px, py, pd, n, width(m.borderWidth), false), m.fill);
     }
@@ -366,10 +374,10 @@ final class SceneShapeRenderer
         return k + 1;
     }
 
-    /** Draws a model hull or clickbox; returns whether it is in the scene this frame. */
+    /** Draws a model's hull, clickbox or outline; returns whether it is in the scene this frame. */
     boolean model(ModelTarget t)
     {
-        layer = t.layer;
+        layer = t.outline ? OUTLINE_LAYER : t.clickbox ? CLICKBOX_LAYER : HULL_LAYER;
         LocalPoint location = t.location();
         if (unavailable || location == null || location.getWorldView() != client.getTopLevelWorldView().getId())
         { return false; }
@@ -391,14 +399,28 @@ final class SceneShapeRenderer
         boolean asHull = false;
         if (t.outline && projected.loops == null)
         {
-            // Over this frame's budget: a hull border instead of a new trace.
-            asHull = outlineNanos > OUTLINE_BUDGET_NANOS || !faces(t, projected);
-            if (!asHull)
+            // Over this frame's budget: the outline traced last, moved to where the model is now, rather than a hull border
+            // for a frame (outlines flipped between the two in a crowd); a hull border only before the first trace. At
+            // most a few frames old: past that it is traced anyway, or the farthest outlines would never be traced again.
+            boolean over = outlineNanos > OUTLINE_BUDGET_NANOS;
+            if (over && projected.traced != null && frame - projected.tracedFrame <= STALE_OUTLINE_FRAMES)
             {
-                long start = System.nanoTime();
-                projected.loops = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
-                    projected.c, projected.faces, projected.hidden, silhouetteScratch);
-                outlineNanos += System.nanoTime() - start;
+                projected.loops = moved(projected.traced, projected.tracedCenterX, projected.tracedCenterY, projected.tracedWidth,
+                    projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d);
+            }
+            else
+            {
+                asHull = over && projected.traced == null || !faces(t, projected);
+                if (!asHull)
+                {
+                    long start = System.nanoTime();
+                    projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
+                        projected.c, projected.faces, projected.hidden, silhouetteScratch);
+                    projected.tracedFrame = frame;
+                    projected.tracedCenterX = projected.centerX; projected.tracedCenterY = projected.centerY;
+                    projected.tracedWidth = projected.width; projected.tracedHeight = projected.height2d;
+                    outlineNanos += System.nanoTime() - start;
+                }
             }
         }
         if (t.outline && !asHull || t.clickbox)
@@ -441,6 +463,28 @@ final class SceneShapeRenderer
         if (!outline.build(px, py, pd, h, cx / h, cy / h, depth, width(t.borderWidth))) { return false; }
         if (offscreen()) { return culled(t.key); }
         return draw(t.key, location, level, t.color, asHull ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
+    }
+
+    /**
+     * Loops traced for one projection, moved and scaled from its bounds (centre and size) to another's: where a model
+     * that walked, or that the camera turned or zoomed on, is now.
+     */
+    static List<float[]> moved(List<float[]> loops, float fromX, float fromY, float fromWidth, float fromHeight,
+        float toX, float toY, float toWidth, float toHeight)
+    {
+        float sx = fromWidth > 0 && toWidth > 0 ? toWidth / fromWidth : 1, sy = fromHeight > 0 && toHeight > 0 ? toHeight / fromHeight : 1;
+        List<float[]> out = new ArrayList<>(loops.size());
+        for (float[] loop : loops)
+        {
+            float[] m = new float[loop.length];
+            for (int i = 0; i < loop.length; i += 2)
+            {
+                m[i] = toX + (loop[i] - fromX) * sx;
+                m[i + 1] = toY + (loop[i + 1] - fromY) * sy;
+            }
+            out.add(m);
+        }
+        return out;
     }
 
     /** Copies a polygon {x0, y0, ...} into px, py and pd at the given depth; returns its number of points. */
@@ -536,6 +580,7 @@ final class SceneShapeRenderer
             minX = Math.min(minX, p.x[i]); maxX = Math.max(maxX, p.x[i]);
             minY = Math.min(minY, p.y[i]); maxY = Math.max(maxY, p.y[i]);
         }
+        p.centerX = (minX + maxX) / 2; p.centerY = (minY + maxY) / 2; p.width = maxX - minX; p.height2d = maxY - minY;
         // Conservative margin includes the widest supported border and its mitres.
         float margin = 64 * pixel;
         int vx = client.getViewportXOffset(), vy = client.getViewportYOffset();
@@ -634,8 +679,8 @@ final class SceneShapeRenderer
         // Floating marks under 117 HD stay under its shadow threshold.
         int cap = xray ? floatingAlphaCap : 255;
         // The cap applies to the colour as a whole, before it is split into layers that blend to it.
-        FlatModel.layers(border, Math.min(cap, hasBorder ? border.getAlpha() : 0), hdLightnessCap, borderLayers);
-        FlatModel.layers(fill, Math.min(cap, fill.getAlpha()), hdLightnessCap, fillLayers);
+        layers(border, Math.min(cap, hasBorder ? border.getAlpha() : 0), borderLayers);
+        layers(fill, Math.min(cap, fill.getAlpha()), fillLayers);
         int borderHsl = borderLayers[0], borderAlpha = borderLayers[1], borderWhite = borderLayers[2];
         int fillHsl = fillLayers[0], fillAlpha = fillLayers[1], fillWhite = fillLayers[2];
         // The white layer: a second copy of the outline, just nearer the camera so it is drawn over the colour.
@@ -663,6 +708,33 @@ final class SceneShapeRenderer
         st.end();
         appended.add(key);
         return true;
+    }
+
+    /** FlatModel.layers per colour, alpha and lightness cap: a colour's HSL takes powers, for every shape every frame. */
+    private final Map<Long, int[]> layerCache = new HashMap<>();
+
+    private void layers(Color color, int alpha, int[] out)
+    {
+        long key = (long) color.getRGB() << 9 | alpha << 1 | (hdLightnessCap ? 1 : 0);
+        int[] known = layerCache.get(key);
+        if (known == null)
+        {
+            if (layerCache.size() > 1024) { layerCache.clear(); }
+            known = new int[3];
+            FlatModel.layers(color, alpha, hdLightnessCap, known);
+            layerCache.put(key, known);
+        }
+        System.arraycopy(known, 0, out, 0, 3);
+    }
+
+    /** The camera the client draws with now; the last one again while it has not changed (getModel asks per object). */
+    private volatile ModelShapes.Camera lastDrawCamera;
+
+    private ModelShapes.Camera drawCamera()
+    {
+        ModelShapes.Camera last = lastDrawCamera, now = ModelShapes.Camera.of(client, last);
+        if (now != last) { lastDrawCamera = now; }
+        return now;
     }
 
     /**
@@ -844,6 +916,15 @@ final class SceneShapeRenderer
         result.replaceAll(FloatClickbox::despur);
         result.removeIf(Objects::isNull);
         return result;
+    }
+
+    /** Whether the first n points in px and py lie this far (canvas units) or farther outside the viewport. */
+    private boolean beside(int n, float margin)
+    {
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < n; i++) { minX = Math.min(minX, px[i]); maxX = Math.max(maxX, px[i]); minY = Math.min(minY, py[i]); maxY = Math.max(maxY, py[i]); }
+        int vx = client.getViewportXOffset(), vy = client.getViewportYOffset();
+        return maxX + margin < vx || maxY + margin < vy || minX - margin > vx + client.getViewportWidth() || minY - margin > vy + client.getViewportHeight();
     }
 
     private boolean offscreen()
@@ -1099,11 +1180,55 @@ final class SceneShapeRenderer
         // On a boat the player's location is in the boat's world view, not the one projected here.
         if (p.getWorldView() != client.getTopLevelWorldView()) { return; }
         LocalPoint at = p.getLocalLocation();
-        Model model = at == null ? null : p.getModel();
-        if (model == null) { return; }
+        if (at == null) { return; }
         // As the client places an actor: on its footprint's height, raised by its animation.
         int height = Perspective.getFootprintTileHeight(client, at, p.getWorldView().getPlane(), p.getFootprintSize()) - p.getAnimationHeightOffset();
-        if (playerShape.take(model, at.getX(), at.getY(), height, p.getCurrentOrientation())) { player = playerShape; }
+        // Where a wall or object nearer the camera covers the player, it is not seen there and the marks are not cut.
+        // Taken before the player's model, which can share its arrays with the objects' models.
+        playerShape.clearOccluders();
+        occluders(p, at);
+        Model model = p.getModel();
+        if (model != null && playerShape.take(model, at.getX(), at.getY(), height, p.getCurrentOrientation())) { player = playerShape; }
+    }
+
+    /**
+     * The walls and objects that may stand between the camera and the player (and the actors the client keeps as objects
+     * on their tiles): those on the tiles along the way from the camera to the player and beside them.
+     */
+    private void occluders(Player p, LocalPoint at)
+    {
+        int plane = p.getWorldView().getPlane();
+        Scene scene = client.getTopLevelWorldView().getScene();
+        Tile[][][] levels = scene == null ? null : scene.getTiles();
+        if (levels == null || plane < 0 || plane >= levels.length) { return; }
+        Tile[][] tiles = levels[plane];
+        float dx = at.getX() - camera.x, dy = at.getY() - camera.y;
+        int steps = (int) (Math.hypot(dx, dy) / 64) + 1;
+        Set<Object> taken = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<Long> visited = new HashSet<>();
+        for (int i = 0; i <= steps; i++)
+        {
+            int cx = (int) (camera.x + dx * i / steps) >> 7, cy = (int) (camera.y + dy * i / steps) >> 7;
+            for (int tx = cx - 1; tx <= cx + 1; tx++)
+            {
+                for (int ty = cy - 1; ty <= cy + 1; ty++)
+                {
+                    if (tx < 0 || ty < 0 || tx >= tiles.length || ty >= tiles[tx].length || tiles[tx][ty] == null || !visited.add((long) tx << 32 | ty)) { continue; }
+                    Tile t = tiles[tx][ty];
+                    WallObject w = t.getWallObject();
+                    if (w != null && taken.add(w)) { occluder(w.getRenderable1(), 0, w, p); occluder(w.getRenderable2(), 0, w, p); }
+                    for (GameObject o : t.getGameObjects()) { if (o != null && taken.add(o)) { occluder(o.getRenderable(), o.getModelOrientation(), o, p); } }
+                }
+            }
+        }
+    }
+
+    private void occluder(Renderable r, int orientation, TileObject o, Player p)
+    {
+        if (r == null || r == p) { return; }
+        Model m = r instanceof Model ? (Model) r : r.getModel();
+        LocalPoint at = o.getLocalLocation();
+        if (m != null && at != null) { playerShape.occluder(m, at.getX(), at.getY(), o.getZ(), orientation); }
     }
 
     /** Whether the shape with this key is in the scene this frame. */
@@ -1225,7 +1350,7 @@ final class SceneShapeRenderer
         final List<String> keys = new ArrayList<>();
 
         /**
-         * What the renderer may read while In-World Tile Markers writes the next frame: getModel() can run
+         * What the renderer may read while HD World Markers writes the next frame: getModel() can run
          * on another thread, so it works on this copy, taken when the frame is written.
          */
         private Model frozenModel;
@@ -1251,7 +1376,7 @@ final class SceneShapeRenderer
         }
 
         /** Scratch for pullToCamera, which is synchronized. */
-        private final float[] pullPoint = new float[3], pullGround = new float[3];
+        private final float[] pullPoint = new float[3], pullGround = new float[3], pullReach = new float[2];
 
         synchronized void freeze(int anchorX, int anchorY, int anchorZ, PlayerSilhouette player)
         {
@@ -1291,15 +1416,31 @@ final class SceneShapeRenderer
             for (int f = 0; f < o.faces; f++) { float l = fl[ffa[o.source[f]]]; sl[o.a[f]] = l; sl[o.b[f]] = l; sl[o.c[f]] = l; }
             float[] vx = m.getVerticesX(), vy = m.getVerticesY(), vz = m.getVerticesZ();
             float[] p = pullPoint, g = pullGround;
+            // One depth per layer for every point, higher layers nearer (see XRAY_DEPTH): the ranking, not the ground,
+            // decides. With the anchor far from the camera (no tile near it to hang on, as in a building) the points
+            // cannot come that near: then the layers lie farther, where every point's ray is within reach, still one depth
+            // each. Stopping each point at its own reach left one layer at many depths, and the renderer's depth sort
+            // drew an NPC's marks over and under each other in turn as they moved.
+            reach(cam, o, g, pullReach);
+            float lo = pullReach[0], hi = pullReach[1];
+            float top = lo <= XRAY_DEPTH ? XRAY_DEPTH : (float) Math.floor(lo) + 1.5f, step = XRAY_LAYER_DEPTH;
+            // An even whole step keeps every layer, and a white layer half a step up, in the middle of a whole unit.
+            if (top + XRAY_TOP_LAYER * step > hi) { step = 2 * (float) Math.floor((hi - top) / XRAY_TOP_LAYER / 2); }
+            boolean planes = lo <= hi && step >= 2;
             for (int i = 0; i < o.vertices; i++)
             {
                 float bias = sl[i] * 0.25f;
                 // The floor keeps the layer order (and the white layer in front) where the depth is clamped.
                 float floor = XRAY_MIN_DEPTH + XRAY_LAYER_SPAN - bias;
-                // One depth per layer, higher layers nearer (see XRAY_DEPTH): the ranking, not the ground, decides.
                 float rank = Math.max(0, Math.min(XRAY_TOP_LAYER, sl[i]));
-                cam.unproject(o.x[i], o.y[i], o.depth[i], g);
-                float at = Math.max(floor, withinReach(cam, g[0], g[1], g[2], o.depth[i], XRAY_DEPTH + (XRAY_TOP_LAYER - rank) * XRAY_LAYER_DEPTH, bias));
+                float at;
+                if (planes) { at = Math.max(floor, top + (XRAY_TOP_LAYER - rank) * step); }
+                else
+                {
+                    // No depth within reach of every point (a shape spread wide around a far anchor): each point as near
+                    // as its own reach lets it.
+                    at = Math.max(floor, withinReach(cam, o.x[i], o.y[i], o.depth[i], g, XRAY_DEPTH + (XRAY_TOP_LAYER - rank) * XRAY_LAYER_DEPTH, bias));
+                }
                 cam.unproject(o.x[i], o.y[i], at, p);
                 vx[i] = p[0] - fAnchorX;
                 vy[i] = p[2] - fAnchorZ;
@@ -1330,21 +1471,55 @@ final class SceneShapeRenderer
         }
 
         /**
-         * The depth to use on the ray from the camera to ground point g (at depth dg): the wanted depth,
-         * or, when that lies farther than XRAY_REACH from the anchor, the nearest depth within it.
+         * The depths at which the rays from the camera through all points of o are within XRAY_REACH of the anchor: out
+         * {nearest, farthest}, nearest beyond farthest when no one depth is within reach on every ray.
          */
-        private float withinReach(ModelShapes.Camera cam, float gx, float gy, float gz, float dg, float wanted, float bias)
+        private void reach(ModelShapes.Camera cam, ScreenOutline o, float[] g, float[] out)
         {
-            if (!(dg > 0)) { return wanted; }
+            float lo = 0, hi = Float.MAX_VALUE;
+            double[] span = pullSpan;
+            for (int i = 0; i < o.vertices && lo <= hi; i++)
+            {
+                float dg = o.depth[i];
+                if (!(dg > 0) || !ray(cam, o.x[i], o.y[i], dg, g, span)) { lo = Float.MAX_VALUE; break; }
+                lo = Math.max(lo, (float) (span[0] * dg));
+                hi = Math.min(hi, (float) (span[1] * dg));
+            }
+            out[0] = lo; out[1] = hi;
+        }
+
+        /** Scratch for ray. */
+        private final double[] pullSpan = new double[2];
+
+        /**
+         * Where the ray from the camera through canvas point (sx, sy), to its ground point at depth dg (g: scratch), is
+         * within XRAY_REACH of the anchor: out {enters, leaves} as multiples of dg. False when it never is.
+         */
+        private boolean ray(ModelShapes.Camera cam, float sx, float sy, float dg, float[] g, double[] out)
+        {
+            cam.unproject(sx, sy, dg, g);
             // Points on the ray: camera + (g - camera) * s, where s = depth / dg.
             float ux = cam.x - fAnchorX, uy = cam.y - fAnchorY, uz = cam.z - fAnchorZ;
-            float vx = gx - cam.x, vy = gy - cam.y, vz = gz - cam.z;
+            float vx = g[0] - cam.x, vy = g[1] - cam.y, vz = g[2] - cam.z;
             double a = vx * vx + vy * vy + vz * vz, b = 2.0 * (ux * vx + uy * vy + uz * vz);
-            double c = ux * ux + uy * uy + uz * uz - (double) XRAY_REACH * XRAY_REACH;
-            double disc = b * b - 4 * a * c;
-            if (a <= 0 || disc < 0) { return dg; }
-            double enter = (-b - Math.sqrt(disc)) / (2 * a), exit = (-b + Math.sqrt(disc)) / (2 * a);
-            double s = wanted / dg;
+            double c = ux * ux + uy * uy + uz * uz - (double) XRAY_REACH * XRAY_REACH, disc = b * b - 4 * a * c;
+            if (a <= 0 || disc < 0) { return false; }
+            double root = Math.sqrt(disc);
+            out[0] = (-b - root) / (2 * a);
+            out[1] = (-b + root) / (2 * a);
+            return true;
+        }
+
+        /**
+         * The depth to use on the ray from the camera through canvas point (sx, sy), whose ground point lies at depth dg:
+         * the wanted depth, or, when that lies farther than XRAY_REACH from the anchor, the nearest depth within it.
+         */
+        private float withinReach(ModelShapes.Camera cam, float sx, float sy, float dg, float[] g, float wanted, float bias)
+        {
+            if (!(dg > 0)) { return wanted; }
+            double[] span = pullSpan;
+            if (!ray(cam, sx, sy, dg, g, span)) { return dg; }
+            double enter = span[0], exit = span[1], s = wanted / dg;
             // A camera inside the reach: far points could be wanted beyond it.
             if (s > exit) { return (float) Math.max(XRAY_MIN_DEPTH, exit * dg - bias); }
             if (s >= enter) { return wanted; }
@@ -1377,7 +1552,7 @@ final class SceneShapeRenderer
         {
             Model model = this.model;
             if (model == null) { return null; }
-            ModelShapes.Camera now = ModelShapes.Camera.of(client);
+            ModelShapes.Camera now = drawCamera();
             // Borders are as wide as wanted for the camera the frame was built with. When the client draws with one
             // that jumped (at login the frame's camera was not set yet, or a teleport), they became a screen-wide
             // flash of colour for a frame: nothing is drawn until the next frame is built with the new camera.

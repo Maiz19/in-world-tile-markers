@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import java.awt.Color;
 import net.runelite.api.JagexColor;
@@ -16,6 +16,9 @@ final class FlatModel
 
     /** Packed HSL white: no saturation, full lightness. */
     static final int WHITE = 127;
+
+    /** The least white alpha drawn as a layer of its own. */
+    static final int MIN_WHITE = 16;
 
     /** WHITE as sRGB, as 117 HD converts it. */
     private static final float[] WHITE_RGB = rgb(WHITE);
@@ -45,6 +48,8 @@ final class FlatModel
         if (t <= 0) { return; }
         // White at alpha a*t over the capped colour at a*(1-t)/(1-a*t) blends like the colour at alpha a.
         float a = alpha / 255f, whiteAlpha = a * t;
+        // So little white that it would not show (cyan: about 7) is left out: it doubled the geometry of every such mark.
+        if (whiteAlpha * 255 < MIN_WHITE) { return; }
         float colourAlpha = whiteAlpha >= 1 ? 0 : a * (1 - t) / (1 - whiteAlpha);
         out[0] = capped; out[1] = Math.round(colourAlpha * 255); out[2] = Math.round(whiteAlpha * 255);
     }
@@ -101,11 +106,11 @@ final class FlatModel
         for (int i = 0; i < nx.length; i++) { nx[i] = 0; ny[i] = -256; nz[i] = 0; }
     }
 
-    /** Recomputes the cached extremes after vertices changed in place; the bounds cylinder stays fixed. */
+    /** Recomputes the cached bounding box after vertices changed in place; the bounds cylinder stays fixed. */
     static void bounds(Model m)
     {
-        // Extremes may be cached per orientation; switch away and back.
-        m.calculateExtreme(1);
-        m.calculateExtreme(0);
+        // The box is cached per orientation; switch away and back.
+        m.getAABB(1);
+        m.getAABB(0);
     }
 }

@@ -26,10 +26,10 @@
 /*
  * RuneLite's clickbox (Perspective.getClickbox, calculateAABB and calculate2DBounds, and SimplePolygon.intersectWithConvex
  * of https://github.com/runelite/runelite, tag runelite-parent-1.12.39), copyright (c) 2019 Abex and the RuneLite
- * contributors, BSD 2-Clause License; see META-INF/LICENSE-runelite and THIRD_PARTY_NOTICES.md. Changes for In-World Tile
- * Markers: computed from In-World Tile Markers' float projection at a quarter of a pixel, the clip in floats.
+ * contributors, BSD 2-Clause License; see META-INF/LICENSE-runelite and THIRD_PARTY_NOTICES.md. Changes for HD World
+ * Markers: computed from HD World Markers' float projection at a quarter of a pixel, the clip in floats.
  */
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -82,7 +82,7 @@ final class FloatClickbox
             rects[count * 4 + 3] = Math.round(maxY * SUBPIXELS);
             count++;
         }
-        List<int[]> union = union(rects, count);
+        List<int[]> union = union(rects, inside(rects, count));
         if (union == null) { return null; }
         List<float[]> out = new ArrayList<>(union.size());
         for (int[] polygon : union)
@@ -121,7 +121,7 @@ final class FloatClickbox
         for (int i = 0; i < n; i++)
         {
             int j = (i + 1) % n;
-            double l = Math.hypot(p[j * 2] - p[i * 2], p[j * 2 + 1] - p[i * 2 + 1]);
+            double dx = p[j * 2] - p[i * 2], dy = p[j * 2 + 1] - p[i * 2 + 1], l = dx * dx + dy * dy;
             if (l > longest) { longest = l; start = j; }
         }
         boolean[] drop = new boolean[n], keep = new boolean[n];
@@ -131,7 +131,7 @@ final class FloatClickbox
             int b = (start + k) % n, c = (b + 1) % n, a = (b + n - 1) % n, d = (c + 1) % n;
             if (drop[b] || keep[b] || drop[c] || keep[c] || drop[a] || drop[d] || a == d || n - dropped <= 4) { continue; }
             float ex = p[c * 2] - p[b * 2], ey = p[c * 2 + 1] - p[b * 2 + 1];
-            if (Math.hypot(ex, ey) >= STEP) { continue; }
+            if (ex * ex + ey * ey >= STEP * STEP) { continue; }
             double turnB = cross(p, a, b, c), turnC = cross(p, b, c, d);
             if (!(turnB * turnC < 0)) { continue; }
             if (Silhouette.distance(p, b, a, d) > STEP_ERROR || Silhouette.distance(p, c, a, d) > STEP_ERROR) { continue; }
@@ -174,7 +174,7 @@ final class FloatClickbox
     {
         float ax = s[b * 2] - s[a * 2], ay = s[b * 2 + 1] - s[a * 2 + 1];
         float bx = s[c * 2] - s[b * 2], by = s[c * 2 + 1] - s[b * 2 + 1];
-        float la = (float) Math.hypot(ax, ay), lb = (float) Math.hypot(bx, by);
+        float la = (float) Math.sqrt(ax * ax + ay * ay), lb = (float) Math.sqrt(bx * bx + by * by);
         return la < 1e-3f || lb < 1e-3f || ax * bx + ay * by < -0.94f * la * lb || Math.abs(ax * by - ay * bx) < 1e-4f * la * lb;
     }
 
@@ -184,6 +184,59 @@ final class FloatClickbox
         for (int i = 0, n = p.length / 2; i < n; i++) { int j = (i + 1) % n; sum += p[i * 2] * p[j * 2 + 1] - p[j * 2] * p[i * 2 + 1]; }
         return sum / 2;
     }
+
+    /**
+     * Leaves out the rectangles {x1, y1, x2, y2, ...} that lie wholly inside the others: they do not change the union,
+     * and each walked every scan line segment it spans (most of a model's faces lie inside it, most of the clickbox's
+     * time). A grid counts per cell the rectangles that cover all of it; a rectangle goes when every cell it touches is
+     * covered all by another one still in. Returns how many are left, moved to the front in their order.
+     */
+    static int inside(int[] r, int count)
+    {
+        if (count < 16) { return count; }
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+        for (int i = 0; i < count; i++)
+        {
+            minX = Math.min(minX, r[i * 4]); minY = Math.min(minY, r[i * 4 + 1]);
+            maxX = Math.max(maxX, r[i * 4 + 2]); maxY = Math.max(maxY, r[i * 4 + 3]);
+        }
+        // Cells of at least four pixels, larger for a large union: at most about 64k of them.
+        int size = Math.max(4 * SUBPIXELS, (int) Math.ceil(Math.sqrt((double) (maxX - minX) * (maxY - minY) / 65536)));
+        int cols = (maxX - minX) / size + 1, rows = (maxY - minY) / size + 1;
+        int[] covered = new int[cols * rows];
+        for (int i = 0; i < count; i++)
+        {
+            int c0 = ceil(r[i * 4] - minX, size), c1 = (r[i * 4 + 2] - minX) / size - 1;
+            int r0 = ceil(r[i * 4 + 1] - minY, size), r1 = (r[i * 4 + 3] - minY) / size - 1;
+            for (int row = r0; row <= r1; row++) { for (int col = c0; col <= c1; col++) { covered[row * cols + col]++; } }
+        }
+        int kept = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int x1 = r[i * 4] - minX, y1 = r[i * 4 + 1] - minY, x2 = r[i * 4 + 2] - minX, y2 = r[i * 4 + 3] - minY;
+            int c0 = ceil(x1, size), c1 = x2 / size - 1, r0 = ceil(y1, size), r1 = y2 / size - 1;
+            // Every cell it touches, each covered all by another rectangle (its own count left out where it covers it).
+            boolean within = x2 > x1 && y2 > y1;
+            for (int row = y1 / size, lastRow = ceil(y2, size) - 1; within && row <= lastRow; row++)
+            {
+                for (int col = x1 / size, lastCol = ceil(x2, size) - 1; col <= lastCol; col++)
+                {
+                    boolean own = row >= r0 && row <= r1 && col >= c0 && col <= c1;
+                    if (covered[row * cols + col] - (own ? 1 : 0) < 1) { within = false; break; }
+                }
+            }
+            if (within)
+            {
+                for (int row = r0; row <= r1; row++) { for (int col = c0; col <= c1; col++) { covered[row * cols + col]--; } }
+                continue;
+            }
+            if (kept != i) { System.arraycopy(r, i * 4, r, kept * 4, 4); }
+            kept++;
+        }
+        return kept;
+    }
+
+    private static int ceil(int a, int b) { return (a + b - 1) / b; }
 
     /**
      * RectangleUnion.union: the union of rectangles {x1, y1, x2, y2, ...} (count of them) as polygons {x0, y0, ...}, by

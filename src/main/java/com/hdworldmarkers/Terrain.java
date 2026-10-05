@@ -25,9 +25,9 @@
 /*
  * Height interpolation follows RuneLite's Perspective.getTileHeight (https://github.com/runelite/runelite),
  * BSD 2-Clause License, copyright the RuneLite contributors; see META-INF/LICENSE-runelite and
- * THIRD_PARTY_NOTICES.md. Changes for In-World Tile Markers: no LocalPoint per sample, a fixed level per footprint.
+ * THIRD_PARTY_NOTICES.md. Changes for HD World Markers: no LocalPoint per sample, a fixed level per footprint.
  */
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import net.runelite.api.WorldView;
 

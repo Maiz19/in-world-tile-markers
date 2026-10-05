@@ -7,6 +7,6 @@ def runeLiteVersion = 'latest.release'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
 }
-group = 'com.inworldtilemarkers'
+group = 'com.hdworldmarkers'
 version = '1.0.0'
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release.set(11) }

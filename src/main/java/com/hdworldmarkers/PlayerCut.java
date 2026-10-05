@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -66,7 +66,7 @@ final class PlayerCut
         Map<Long, float[]> open = new HashMap<>(), next = new HashMap<>();
         float[] cross = new float[ne];
         int[] crossEdge = new int[ne];
-        Integer[] order = new Integer[ne];
+        int[] order = new int[ne];
         for (int band = 0; band + 1 < ny; band++)
         {
             float ya = ys[band], yb = ys[band + 1];
@@ -83,7 +83,13 @@ final class PlayerCut
                     k++;
                 }
             }
-            Arrays.sort(order, 0, k, (p, q) -> Float.compare(cross[p], cross[q]));
+            // By crossing, in place: a few per band, sorted without boxing each index (this runs every frame the camera moves).
+            for (int i = 1; i < k; i++)
+            {
+                int o = order[i], j = i - 1;
+                while (j >= 0 && cross[order[j]] > cross[o]) { order[j + 1] = order[j]; j--; }
+                order[j + 1] = o;
+            }
             // Outside the silhouette (even-odd): from the box's left side to the first crossing, between the second
             // and third, and so on, to the box's right side.
             next.clear();

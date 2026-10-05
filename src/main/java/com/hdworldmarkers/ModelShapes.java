@@ -25,9 +25,9 @@
 /*
  * Camera.project uses the same math as RuneLite's Perspective.localToCanvasGpu and modelToCanvas
  * (https://github.com/runelite/runelite), BSD 2-Clause License, copyright the RuneLite contributors;
- * see META-INF/LICENSE-runelite and THIRD_PARTY_NOTICES.md. Unproject and the convex hull are In-World Tile Markers' own.
+ * see META-INF/LICENSE-runelite and THIRD_PARTY_NOTICES.md. Unproject and the convex hull are HD World Markers' own.
  */
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 /**
  * Camera projection matching the client, and convex hulls in canvas space.
@@ -56,11 +56,18 @@ final class ModelShapes
         }
 
         /** The client's camera and viewport now. */
-        static Camera of(net.runelite.api.Client client)
+        static Camera of(net.runelite.api.Client client) { return of(client, null); }
+
+        /** The client's camera and viewport now: last when it is the same (no new camera, nor its sines and cosines). */
+        static Camera of(net.runelite.api.Client client, Camera last)
         {
-            return new Camera(client.getCameraFpX(), client.getCameraFpY(), client.getCameraFpZ(), client.getCameraFpPitch(),
-                client.getCameraFpYaw(), client.getScale(), client.getViewportXOffset(), client.getViewportYOffset(),
-                client.getViewportWidth(), client.getViewportHeight());
+            float x = client.getCameraFpX(), y = client.getCameraFpY(), z = client.getCameraFpZ();
+            float pitch = client.getCameraFpPitch(), yaw = client.getCameraFpYaw();
+            int scale = client.getScale(), vx = client.getViewportXOffset(), vy = client.getViewportYOffset();
+            int vw = client.getViewportWidth(), vh = client.getViewportHeight();
+            if (last != null && last.x == x && last.y == y && last.z == z && last.pitch == pitch && last.yaw == yaw && last.scale == scale
+                && last.centerX == vx + vw / 2f && last.centerY == vy + vh / 2f) { return last; }
+            return new Camera(x, y, z, pitch, yaw, scale, vx, vy, vw, vh);
         }
 
         /** Whether another camera projects exactly as this one. */
@@ -176,6 +183,13 @@ final class ModelShapes
     static float projectModel(Camera camera, float[] vx, float[] vy, float[] vz, int n,
         int localX, int localY, int height, int orientation, float[] outX, float[] outY)
     {
+        return projectModel(camera, vx, vy, vz, n, localX, localY, height, orientation, outX, outY, null, SceneShapeRenderer.PARTIAL_NEAR);
+    }
+
+    /** As projectModel, with every vertex's depth in outD too (null: not wanted), and vertices nearer than near left out. */
+    static float projectModel(Camera camera, float[] vx, float[] vy, float[] vz, int n,
+        int localX, int localY, int height, int orientation, float[] outX, float[] outY, float[] outD, float near)
+    {
         double angle = (orientation & 2047) * Math.PI / 1024;
         float sin = (float) Math.sin(angle), cos = (float) Math.cos(angle);
         float[] p = new float[3];
@@ -185,8 +199,9 @@ final class ModelShapes
             float rx = vz[i] * sin + vx[i] * cos;
             float rz = vz[i] * cos - vx[i] * sin;
             camera.project(localX + rx, localY + rz, height + vy[i], p);
-            if (!(p[2] >= SceneShapeRenderer.PARTIAL_NEAR)) { outX[i] = Float.NaN; outY[i] = Float.NaN; continue; }
+            if (!(p[2] >= near)) { outX[i] = Float.NaN; outY[i] = Float.NaN; continue; }
             outX[i] = p[0]; outY[i] = p[1];
+            if (outD != null) { outD[i] = p[2]; }
             nearest = Math.min(nearest, p[2]);
         }
         return nearest == Float.MAX_VALUE ? Float.NaN : nearest;

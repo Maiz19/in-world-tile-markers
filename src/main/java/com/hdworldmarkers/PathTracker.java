@@ -1,12 +1,12 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import static net.runelite.api.MenuAction.*;
 
-import com.inworldtilemarkers.InWorldTileMarkersConfig.DrawLocations;
-import com.inworldtilemarkers.InWorldTileMarkersConfig.DrawMode;
-import com.inworldtilemarkers.InWorldTileMarkersConfig.MarkerStyle;
-import com.inworldtilemarkers.InWorldTileMarkersConfig.PathDisplaySetting;
-import com.inworldtilemarkers.RouteFinder.Target;
+import com.hdworldmarkers.HdWorldMarkersConfig.DrawLocations;
+import com.hdworldmarkers.HdWorldMarkersConfig.DrawMode;
+import com.hdworldmarkers.HdWorldMarkersConfig.MarkerStyle;
+import com.hdworldmarkers.HdWorldMarkersConfig.PathDisplaySetting;
+import com.hdworldmarkers.RouteFinder.Target;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -47,7 +47,7 @@ final class PathTracker extends Overlay implements KeyListener
     /** Tiles a predicted path has at most. */
     static final int MAX_PREDICTED = 300;
     @Inject private Client client;
-    @Inject private InWorldTileMarkersConfig config;
+    @Inject private HdWorldMarkersConfig config;
     @Inject private OverlayManager overlays;
     @Inject private KeyManager keys;
     @Inject private MouseManager mouse;
@@ -476,26 +476,45 @@ final class PathTracker extends Overlay implements KeyListener
         List<Marker> out = new ArrayList<>();
         Player me = client.getLocalPlayer();
         if (me == null) { return out; }
-        if (shows(false, false)) { each(hoverPath, false, (tile, main) -> out.add(marker(tile, false, main))); }
-        boolean shown = shows(true, false);
-        if (shown) { each(activePath, true, (tile, main) -> out.add(marker(tile, true, main))); }
-        if (shown && guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(me.getWorldView(), guess)))
+        WorldView wv = me.getWorldView();
+        if (shows(false, false)) { PathLook hover = new PathLook(false, wv); each(hoverPath, false, (tile, main) -> out.add(hover.marker(tile, main))); }
+        if (!shows(true, false)) { return out; }
+        PathLook active = new PathLook(true, wv);
+        each(activePath, true, (tile, main) -> out.add(active.marker(tile, main)));
+        if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(wv, guess)))
         {
-            if (config.activePathDrawMode() == DrawMode.TARGET_TILE) { out.add(marker(guess, true, true)); }
-            else { predict(me, guess); each(predictedPath, true, (tile, main) -> out.add(marker(tile, true, main))); }
+            if (config.activePathDrawMode() == DrawMode.TARGET_TILE) { out.add(active.marker(guess, true)); }
+            else { predict(me, guess); each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main))); }
         }
         return out;
     }
 
-    private Marker marker(WorldPoint tile, boolean active, boolean main)
+    /** A path's options as its tiles need them, read once per path rather than per tile (a predicted path has hundreds). */
+    private final class PathLook
     {
-        WorldView wv = client.getLocalPlayer().getWorldView();
-        boolean dot = (active ? config.activePathMarkerStyle() : config.hoverPathMarkerStyle()) == MarkerStyle.DOT;
-        Marker m = new Marker((active ? "path:a:" : "path:h:") + tile.getX() + ":" + tile.getY(), MarkerSources.local(wv, tile), wv.getPlane(), 1, 1,
-            color(active, main, false), color(active, main, true), dot ? 2 : config.pathBorderWidth(), null, false);
-        m.dot = dot;
-        m.layer = active ? Marker.PATH_ACTIVE : Marker.PATH_HOVER;
-        return m;
+        final boolean active, dot;
+        final Color stroke, fill, passedStroke, passedFill;
+        final double width;
+        final WorldView wv;
+
+        PathLook(boolean active, WorldView wv)
+        {
+            this.active = active; this.wv = wv;
+            dot = (active ? config.activePathMarkerStyle() : config.hoverPathMarkerStyle()) == MarkerStyle.DOT;
+            stroke = color(active, true, false); fill = color(active, true, true);
+            passedStroke = color(active, false, false); passedFill = color(active, false, true);
+            width = dot ? 2 : config.pathBorderWidth();
+        }
+
+        /** A path tile, stood on (main) or run past. */
+        Marker marker(WorldPoint tile, boolean main)
+        {
+            Marker m = new Marker((active ? "path:a:" : "path:h:") + tile.getX() + ":" + tile.getY(), MarkerSources.local(wv, tile), wv.getPlane(), 1, 1,
+                main ? stroke : passedStroke, main ? fill : passedFill, width, null);
+            m.dot = dot;
+            m.layer = active ? Marker.PATH_ACTIVE : Marker.PATH_HOVER;
+            return m;
+        }
     }
 
     /**

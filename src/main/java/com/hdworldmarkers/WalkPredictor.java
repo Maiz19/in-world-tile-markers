@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;

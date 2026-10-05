@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 /**
  * Border and fill triangles for a closed canvas polygon, with a depth per

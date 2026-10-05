@@ -1,4 +1,4 @@
-package com.inworldtilemarkers;
+package com.hdworldmarkers;
 
 import java.io.BufferedReader;
 import java.io.IOException;
