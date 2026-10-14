@@ -23,8 +23,8 @@ import net.runelite.client.ui.overlay.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@PluginDescriptor(name = "HD World Markers", description = "Sharp tile, NPC, object and path markers drawn in the game world, also in stretched mode",
-    tags = {"tiles", "markers", "npcs", "objects", "path", "stretched"})
+@PluginDescriptor(name = "HD World Markers", description = "Sharp tile, line, NPC, object and path markers drawn in the game world, also in stretched mode",
+    tags = {"tiles", "lines", "markers", "npcs", "objects", "path", "stretched"})
 // Your Slayer task's NPCs (Slayer task option) come from the Slayer plugin's service.
 @PluginDependency(SlayerPlugin.class)
 public class HdWorldMarkersPlugin extends Plugin
