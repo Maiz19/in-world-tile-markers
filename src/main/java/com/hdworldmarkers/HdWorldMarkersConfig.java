@@ -125,7 +125,7 @@ public interface HdWorldMarkersConfig extends Config
     enum Edge { WEST, EAST, SOUTH, NORTH }
 
     @ConfigItem(keyName = "markLines", name = "Add line option", description = "Shift + right-click a tile: Add line and Remove line. While Shift stays held, the mouse wheel turns the line you just added to its next side", position = 0, section = lineSection)
-    default boolean markLines() { return true; }
+    default boolean markLines() { return false; }
 
     @Alpha
     @ConfigItem(keyName = "lineColor", name = "Line color", description = "Color of new lines; each line keeps the color it was added with", position = 1, section = lineSection)
@@ -252,7 +252,7 @@ public interface HdWorldMarkersConfig extends Config
     default boolean npcSlayerTask() { return false; }
 
     @ConfigItem(keyName = "npcSlayerTaskStyles", name = "Slayer task styles", description = "The styles your Slayer task's NPCs get, in the Slayer task color. Ctrl + click picks more than one", position = 6, section = npcSection)
-    default Set<NpcStyle> npcSlayerTaskStyles() { return EnumSet.of(NpcStyle.HULL); }
+    default Set<NpcStyle> npcSlayerTaskStyles() { return EnumSet.of(NpcStyle.TRUE_TILE); }
 
     @Alpha
     @ConfigItem(keyName = "npcsInFrontOfTiles", name = "Draw NPCs in front of marks (fps heavy)", description = "Tagged NPCs, and those under In front names, are drawn in front of the marks. Needs Through walls", position = 8, section = npcSection)
