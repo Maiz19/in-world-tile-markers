@@ -51,24 +51,26 @@ public interface HdWorldMarkersConfig extends Config
     String generalSection = "general";
     @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, Mark", position = 1)
     String groundSection = "ground";
-    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 2)
+    @ConfigSection(name = "Line markers", description = "Lines you draw along tile sides: Shift + right-click a tile, Add line; the mouse wheel turns a new line while Shift is held", position = 2)
+    String lineSection = "lines";
+    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 3)
     String destinationSection = "destinationTile";
-    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 3)
+    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 4)
     String hoveredSection = "hoveredTile";
-    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 4)
+    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 5)
     String currentSection = "currentTile";
-    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 5)
+    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 6)
     String npcSection = "npcs";
-    @ConfigSection(name = "NPC styles", description = "Per style the names of the NPCs that have it, and its colors. Tag style on a tagged NPC adds or removes its name", position = 6)
+    @ConfigSection(name = "NPC styles", description = "Per style the names of the NPCs that have it, and its colors. Tag style on a tagged NPC adds or removes its name", position = 7)
     String npcStyleSection = "npcStyles";
-    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 7)
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 8)
     String objectSection = "objects";
-    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 8)
+    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 9)
     String agilitySection = "agility";
-    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 9)
+    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 10)
     String activePathSection = "activePath";
 
-    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 10, closedByDefault = true)
+    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 11, closedByDefault = true)
     String hoverPathSection = "hoverPath";
 
     // General
@@ -86,7 +88,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "warnDoubleDrawing", name = "Double drawing warning", description = "A chat message when another plugin draws the same marks (Ground Markers, Tile Packs, Agility's highlights, ...), so they show twice, with what to turn off", position = 5, section = generalSection)
     default boolean warnDoubleDrawing() { return true; }
 
-    @ConfigItem(keyName = "predictWalk", name = "Predict walk target", description = "After Walk here, show the clicked tile as destination and a predicted path, also when you click beyond the loaded area (such as 117 HD's extended terrain). Beyond it, heights and walls are unknown: the path is a straight line.", position = 2, section = generalSection)
+    @ConfigItem(keyName = "predictWalk", name = "Predict walk target", description = "After Walk here, show the clicked tile as destination and a predicted path, also when you click beyond the loaded area (such as 117 HD's extended terrain). Beyond it the path follows what the extended view shows (heights, water, walls, objects) as far as it is loaded, then a straight line.", position = 2, section = generalSection)
     default boolean predictWalk() { return true; }
 
     // Tile markers
@@ -108,11 +110,33 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "rememberTileColors", name = "Remember tile colors", description = "Tiles keep a color of their own (Color, and tiles from Ground Markers). Off: every tile in the Tile color", position = 6, section = groundSection)
     default boolean rememberTileColors() { return true; }
 
-    @ConfigItem(keyName = "tilePacks", name = "Tile Packs", description = "Also draw the packs turned on in the Tile Packs plugin. Turn Tile Packs itself off once your packs are chosen, or they are drawn twice", position = 4, section = groundSection)
+    @ConfigItem(keyName = "tilePacks", name = "Tile Packs", description = "Also draw the packs turned on in the Tile Packs plugin. Turn Tile Packs itself off once your packs are chosen, or they are drawn twice", position = 7, section = groundSection)
     default boolean tilePacks() { return true; }
+
+    @ConfigItem(keyName = "followOtherPlugins", name = "Follow other plugins", description = "What you mark or unmark in Ground Markers, Line Markers, Object Markers, NPC Indicators or Better NPC Highlight is marked or unmarked here at once, while they are installed. Off: only Sync copies their marks", position = 4, section = groundSection)
+    default boolean followOtherPlugins() { return true; }
 
     @ConfigItem(keyName = "showImportExport", name = "Import, export, sync, clear", description = "Import, Export, Sync and Clear on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers, NPC Indicators and Better NPC Highlight (its name lists); Clear removes the tiles of the area you are in", position = 5, section = groundSection)
     default boolean showImportExport() { return true; }
+
+    // Line markers
+
+    /** The side of a tile a line runs along, in Line Markers' names and order (its saved lines name them). */
+    enum Edge { WEST, EAST, SOUTH, NORTH }
+
+    @ConfigItem(keyName = "markLines", name = "Add line option", description = "Shift + right-click a tile: Add line and Remove line. While Shift stays held, the mouse wheel turns the line you just added to its next side", position = 0, section = lineSection)
+    default boolean markLines() { return true; }
+
+    @Alpha
+    @ConfigItem(keyName = "lineColor", name = "Line color", description = "Color of new lines; each line keeps the color it was added with", position = 1, section = lineSection)
+    default Color lineColor() { return Color.YELLOW; }
+
+    @Range(max = 10)
+    @ConfigItem(keyName = "lineWidth", name = "Line width", description = "Width of new lines; each line keeps the width it was added with", position = 2, section = lineSection)
+    default double lineWidth() { return 3; }
+
+    @ConfigItem(keyName = "lineEdge", name = "Line side", description = "The side of the tile a new line is added on; the mouse wheel turns it while Shift is held", position = 3, section = lineSection)
+    default Edge lineEdge() { return Edge.WEST; }
 
     // NPCs
 
@@ -231,6 +255,12 @@ public interface HdWorldMarkersConfig extends Config
     default Set<NpcStyle> npcSlayerTaskStyles() { return EnumSet.of(NpcStyle.HULL); }
 
     @Alpha
+    @ConfigItem(keyName = "npcsInFrontOfTiles", name = "Draw NPCs in front of marks (fps heavy)", description = "Tagged NPCs, and those under In front names, are drawn in front of the marks. Needs Through walls", position = 8, section = npcSection)
+    default boolean npcsInFrontOfTiles() { return false; }
+
+    @ConfigItem(keyName = "npcInFrontNames", name = "In front names", description = "Names of NPCs kept in front of the marks without being tagged, with NPCs in front of marks on: Shift + right-click an NPC, In front. Separated by commas; * matches any text", position = 9, section = npcSection)
+    default String npcInFrontNames() { return ""; }
+
     @ConfigItem(keyName = "npcSlayerTaskColor", name = "Slayer task color", description = "Border color of your Slayer task's NPCs, unless their name has a Tag color", position = 7, section = npcSection)
     default Color npcSlayerTaskColor() { return new Color(224, 60, 49); }
 

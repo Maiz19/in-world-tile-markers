@@ -71,7 +71,7 @@ final class IndicatorOverlay extends Overlay
             {
                 if (!(scene && plugin.drawn(m.key)))
                 {
-                    Shape shape = m.dot || m.offX != null ? facing(m) : polygon(m);
+                    Shape shape = m.dot || m.offX != null ? facing(m) : m.edge >= 0 ? line(m) : polygon(m);
                     if (shape != null) { draw(g, shape, m); }
                 }
                 if (m.label != null && !m.label.isEmpty())
@@ -149,6 +149,16 @@ final class IndicatorOverlay extends Overlay
     {
         int x = client.getViewportXOffset(), y = client.getViewportYOffset();
         return p.getX() > x - 100 && p.getX() < x + client.getViewportWidth() + 100 && p.getY() > y - 20 && p.getY() < y + client.getViewportHeight() + 40;
+    }
+
+    /** A line along one side of the tile, between the side's corners on the canvas, or null. */
+    private Shape line(Marker m)
+    {
+        int[] side = SceneShapeRenderer.SIDES[Math.min(m.edge, SceneShapeRenderer.SIDES.length - 1)];
+        int x0 = m.point.getX() - 64, y0 = m.point.getY() - 64, wv = m.point.getWorldView();
+        Point a = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(x0 + side[0], y0 + side[1], wv), m.plane);
+        Point b = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(x0 + side[2], y0 + side[3], wv), m.plane);
+        return a == null || b == null ? null : new java.awt.geom.Line2D.Float(a.getX(), a.getY(), b.getX(), b.getY());
     }
 
     /** The footprint's corners on the canvas, or null. */

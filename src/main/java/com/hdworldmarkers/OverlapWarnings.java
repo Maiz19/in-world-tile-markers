@@ -39,7 +39,7 @@ final class OverlapWarnings
 
     @Inject
     OverlapWarnings(PluginManager plugins, ConfigManager configs, HdWorldMarkersConfig config, ChatMessageManager chat,
-        TilePackSource tilePacks, AgilitySource agility)
+        TilePackSource tilePacks, AgilitySource agility, MarkerSources sources)
     {
         this.plugins = plugins; this.configs = configs; this.config = config; this.chat = chat;
         BooleanSupplier always = () -> true;
@@ -62,6 +62,7 @@ final class OverlapWarnings
                     || config.agilitySepulchreObstacles() && on("agility", "highlightSepulchreObstacles")
                     || config.agilitySepulchreSkilling() && on("agility", "highlightSepulchreSkilling"))),
             new Overlap("com.tilepacks.TilePacksPlugin", "Tile Packs", () -> config.tilePacks() && tilePacks.any()),
+            new Overlap("com.linemarkers.LineMarkerPlugin", "Line Markers", sources::anyLines),
             // The Slayer plugin's own highlight of your task, off unless chosen there.
             new Overlap("net.runelite.client.plugins.slayer.SlayerPlugin", "Slayer", () -> config.npcSlayerTask()
                 && (chosen("slayer", "highlightHull") || chosen("slayer", "highlightTile") || chosen("slayer", "highlightOutline"))));

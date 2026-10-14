@@ -29,6 +29,7 @@
  */
 package com.hdworldmarkers;
 
+import net.runelite.api.Scene;
 import net.runelite.api.WorldView;
 
 /**
@@ -52,11 +53,18 @@ final class Terrain
      */
     static int heightOnLevel(WorldView wv, int localX, int localY, int z)
     {
-        // Outside the loaded area the nearest edge's height is the best estimate.
-        localX = Math.max(0, Math.min(wv.getSizeX() * 128 - 1, localX));
-        localY = Math.max(0, Math.min(wv.getSizeY() * 128 - 1, localY));
-        int sceneX = localX >> 7, sceneY = localY >> 7;
         int[][][] heights = wv.getTileHeights();
+        int offset = 0;
+        if (localX < 0 || localY < 0 || localX >= wv.getSizeX() * 128 || localY >= wv.getSizeY() * 128)
+        {
+            // Beyond the loaded area: the scene's extended heights (a renderer's extended view, 40 tiles each way) where
+            // there are any, else the nearest edge's height is the best estimate.
+            int[][][] extended = extendedHeights(wv);
+            if (extended != null) { heights = extended; offset = extendedOffset(wv, extended); }
+            localX = Math.max(-offset * 128, Math.min((wv.getSizeX() + offset) * 128 - 1, localX));
+            localY = Math.max(-offset * 128, Math.min((wv.getSizeY() + offset) * 128 - 1, localY));
+        }
+        int sceneX = (localX >> 7) + offset, sceneY = (localY >> 7) + offset;
         // Heights are stored per corner, one more than the tile count.
         int x1 = Math.min(sceneX + 1, heights[z].length - 1), y1 = Math.min(sceneY + 1, heights[z][0].length - 1);
         int fx = localX & 127, fy = localY & 127;
@@ -65,13 +73,33 @@ final class Terrain
         return fy * north + (128 - fy) * south >> 7;
     }
 
+    /** The scene's heights for its extended area, or null where the scene is no larger than the loaded area. */
+    private static int[][][] extendedHeights(WorldView wv)
+    {
+        Scene scene = wv.getScene();
+        int[][][] extended = scene == null ? null : scene.getTileHeights();
+        return extended != null && extended.length > 0 && extended[0].length > wv.getSizeX() + 1 ? extended : null;
+    }
+
+    /** How many tiles the extended arrays reach beyond the loaded area on each side. */
+    static int extendedOffset(WorldView wv, int[][][] extended) { return (extended[0].length - 1 - wv.getSizeX()) / 2; }
+
     /** The plane the client renders a tile's contents on. */
     static int level(WorldView wv, int sceneX, int sceneY, int plane)
     {
         byte[][][] settings = wv.getTileSettings();
-        if (plane < 3 && settings != null && sceneX >= 0 && sceneY >= 0 && sceneX < settings[1].length
-            && sceneY < settings[1][sceneX].length && (settings[1][sceneX][sceneY] & 2) != 0)
-        { return plane + 1; }
-        return plane;
+        if (plane >= 3 || settings == null) { return plane; }
+        if (sceneX < 0 || sceneY < 0 || sceneX >= settings[1].length || sceneY >= settings[1][sceneX].length)
+        {
+            // Beyond the loaded area: the scene's extended settings, where there are any.
+            Scene scene = wv.getScene();
+            byte[][][] extended = scene == null ? null : scene.getExtendedTileSettings();
+            if (extended == null || extended.length < 2 || extended[1].length <= settings[1].length) { return plane; }
+            int offset = (extended[1].length - settings[1].length) / 2;
+            sceneX += offset; sceneY += offset;
+            settings = extended;
+            if (sceneX < 0 || sceneY < 0 || sceneX >= settings[1].length || sceneY >= settings[1][sceneX].length) { return plane; }
+        }
+        return (settings[1][sceneX][sceneY] & 2) != 0 ? plane + 1 : plane;
     }
 }

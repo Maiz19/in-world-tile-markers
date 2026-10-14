@@ -22,8 +22,8 @@ final class Marker
     static final int PATH_HOVER = 6, PATH_ACTIVE = 7;
     /** Tiles other plugins send (ExternalMarks): above Path Marker's path. */
     static final int EXTERNAL = 8;
-    /** Marked tiles, then marked objects' tiles, then the hovered tile. */
-    static final int GROUND = 9, OBJECT = 10, HOVER = 13;
+    /** Marked tiles, then marked objects' tiles, then your lines, then the hovered tile. */
+    static final int GROUND = 9, OBJECT = 10, LINE = 11, HOVER = 13;
     /** Timer pies other plugins send (ExternalMarks): over outlines, under your destination and current tile. */
     static final int PIE = SceneShapeRenderer.OUTLINE_LAYER + 1;
     static final int DESTINATION = PIE + 1, CURRENT = PIE + 2;
@@ -48,6 +48,11 @@ final class Marker
     float[] offX, offY;
     /** How far above the ground the shape hangs, in local units. */
     int lift;
+    /**
+     * A line along one side of the tile instead of the footprint, in the border's width and colour: the side's index in
+     * HdWorldMarkersConfig.Edge (west, east, south, north); -1 for no line.
+     */
+    int edge = -1;
 
     Marker(String key, LocalPoint point, int plane, int width, int height, Color color, Color fill,
         double borderWidth, String label)

@@ -1,5 +1,7 @@
 package com.hdworldmarkers;
 
+import java.util.List;
+
 /**
  * Border and fill triangles for a closed canvas polygon, with a depth per
  * vertex. Arrays are reused between builds to avoid per-frame garbage.
@@ -195,6 +197,38 @@ final class ScreenOutline
 
     /** After a cutOut: per face f, the points and faces made before it at 2f and 2f + 1; after the last face, the totals. */
     int[] before = new int[0];
+    private int[] owner = new int[0], costVertices = new int[0], costFaces = new int[0];
+
+    /**
+     * As before, after one or more cutOuts of geometry loaded with originalVertices points and originalFaces faces: per
+     * original face, the points made for it (each new point counted for the first face it serves) and the faces it became.
+     */
+    int[] costs(int originalVertices, int originalFaces)
+    {
+        if (before.length < 2 * originalFaces + 2) { before = new int[4 * originalFaces + 4]; }
+        if (costVertices.length < originalFaces) { costVertices = new int[originalFaces * 2]; costFaces = new int[originalFaces * 2]; }
+        if (owner.length < vertices) { owner = new int[vertices * 2]; }
+        java.util.Arrays.fill(costVertices, 0, originalFaces, 0);
+        java.util.Arrays.fill(costFaces, 0, originalFaces, 0);
+        java.util.Arrays.fill(owner, 0, vertices, -1);
+        for (int f = 0; f < faces; f++)
+        {
+            int src = source[f];
+            costFaces[src]++;
+            int v1 = a[f], v2 = b[f], v3 = c[f];
+            if (v1 >= originalVertices && owner[v1] < 0) { owner[v1] = src; costVertices[src]++; }
+            if (v2 >= originalVertices && owner[v2] < 0) { owner[v2] = src; costVertices[src]++; }
+            if (v3 >= originalVertices && owner[v3] < 0) { owner[v3] = src; costVertices[src]++; }
+        }
+        int points = 0, made = 0;
+        for (int f = 0; f < originalFaces; f++)
+        {
+            before[2 * f] = points; before[2 * f + 1] = made;
+            points += costVertices[f]; made += costFaces[f];
+        }
+        before[2 * originalFaces] = points; before[2 * originalFaces + 1] = made;
+        return before;
+    }
 
     /**
      * Leaves the player uncovered: of every face, what lies outside the cut's box is kept, and inside it only what
@@ -259,9 +293,13 @@ final class ScreenOutline
             pMinX = Math.min(pMinX, piece[k * 3]); pMaxX = Math.max(pMaxX, piece[k * 3]);
             pMinY = Math.min(pMinY, piece[k * 3 + 1]); pMaxY = Math.max(pMaxY, piece[k * 3 + 1]);
         }
-        for (float[] q : keep.pieces)
+        // Only the pieces of the part's rows: from the first that reaches below its top, to the first that starts below its bottom.
+        List<float[]> pieces = keep.pieces;
+        for (int i = keep.firstBelow(pMinY), n = pieces.size(); i < n; i++)
         {
-            if (q[1] >= pMaxY || q[5] <= pMinY || q[8] >= pMaxX || q[9] <= pMinX) { continue; }
+            float[] q = pieces.get(i);
+            if (q[1] >= pMaxY) { break; }
+            if (q[5] <= pMinY || q[8] >= pMaxX || q[9] <= pMinX) { continue; }
             System.arraycopy(piece, 0, part, 0, count * 3);
             int m = count;
             for (int e = 0; e < 4 && m >= 3; e++)

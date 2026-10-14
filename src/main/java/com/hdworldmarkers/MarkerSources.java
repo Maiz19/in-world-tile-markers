@@ -74,6 +74,9 @@ final class MarkerSources
      */
     private List<Marker> groundMarkers;
     private List<Object> groundOptions;
+    /** Your lines in the scene, and as markers (each keeps its own colour and width), made once per rebuild. */
+    private final List<LineMark> lineMarks = new ArrayList<>();
+    private List<Marker> lineMarkers;
     /** Outlines of tagged NPCs and marked objects in other world views (a boat): only RuneLite's 2D outline draws them. */
     private List<ModelTarget> outlinesElsewhere = Collections.emptyList();
     /** Per style the names and patterns (with *) of its list under NPC styles, as typed. */
@@ -82,6 +85,10 @@ final class MarkerSources
     private final Map<String, Integer> nameStyles = new HashMap<>();
     /** Tag color per NPC name (standardized), read with the names. */
     private Map<String, NpcTag> npcTags = Collections.emptyMap();
+    /** The names and patterns under In front names, whether each NPC name seen matches them, and the NPCs in the scene that do. */
+    private List<String> inFrontNames = Collections.emptyList();
+    private final Map<String, Boolean> inFrontByName = new HashMap<>();
+    private final Set<NPC> inFront = Collections.newSetFromMap(new IdentityHashMap<>());
     // Fadeout and predicted destination state.
     private WorldPoint lastPlayerTile, lastDestination, predicted;
     private long stillSince, arrivedAt, predictedAt;
@@ -113,14 +120,54 @@ final class MarkerSources
         for (NpcStyle style : NpcStyle.values()) { styleNames.put(style, names(configs, style)); }
         nameStyles.clear();
         npcTags = npcTags(configs, gson);
+        inFrontNames = names(configs, NPC_IN_FRONT);
+        inFrontByName.clear();
+    }
+
+    /** Config key of the names kept in front of the marks. */
+    static final String NPC_IN_FRONT = "npcInFrontNames";
+
+    /** A list of names and patterns (with *) saved under this key, as typed. */
+    static List<String> names(ConfigManager configs, String key)
+    {
+        String list = configs.getConfiguration(HdWorldMarkersConfig.GROUP, key);
+        return list == null || list.isEmpty() ? Collections.emptyList() : Text.fromCSV(list);
+    }
+
+    /** Whether an NPC name is under In front names, or a pattern there matches it. */
+    boolean inFront(String name)
+    {
+        if (name == null || inFrontNames.isEmpty()) { return false; }
+        Boolean known = inFrontByName.get(name);
+        if (known == null)
+        {
+            boolean matches = false;
+            for (String entry : inFrontNames) { if (WildcardMatcher.matches(entry, name)) { matches = true; break; } }
+            inFrontByName.put(name, known = matches);
+        }
+        return known;
+    }
+
+    /**
+     * The NPCs in the scene to keep in front of the marks: the tagged ones (their own tile marks lie under them) and those
+     * under In front names, the nearest to you first, at most as many as the renderer cuts out.
+     */
+    List<NPC> npcsInFront()
+    {
+        if (inFront.isEmpty() && npcs.isEmpty()) { return Collections.emptyList(); }
+        Player player = client.getLocalPlayer();
+        LocalPoint at = player == null ? null : player.getLocalLocation();
+        Set<NPC> all = Collections.newSetFromMap(new IdentityHashMap<>());
+        all.addAll(npcs);
+        all.addAll(inFront);
+        List<NPC> near = new ArrayList<>(all);
+        near.removeIf(n -> n.getLocalLocation() == null);
+        if (at != null) { near.sort(Comparator.comparingInt(n -> n.getLocalLocation().distanceTo(at))); }
+        return near.size() > SceneShapeRenderer.MAX_CUTS - 1 ? near.subList(0, SceneShapeRenderer.MAX_CUTS - 1) : near;
     }
 
     /** A style's list of names and patterns (with *), as typed. */
-    static List<String> names(ConfigManager configs, NpcStyle style)
-    {
-        String list = configs.getConfiguration(HdWorldMarkersConfig.GROUP, style.key);
-        return list == null || list.isEmpty() ? Collections.emptyList() : Text.fromCSV(list);
-    }
+    static List<String> names(ConfigManager configs, NpcStyle style) { return names(configs, style.key); }
 
     /** Config key of the colors per NPC name. */
     static final String NPC_TAGS = "npcTags";
@@ -128,7 +175,7 @@ final class MarkerSources
     /** Whether a setting holds tagged names or their colors. */
     static boolean npcKey(String key)
     {
-        if (key.equals(NPC_TAGS)) { return true; }
+        if (key.equals(NPC_TAGS) || key.equals(NPC_IN_FRONT)) { return true; }
         for (NpcStyle style : NpcStyle.values()) { if (style.key.equals(key)) { return true; } }
         return false;
     }
@@ -214,6 +261,7 @@ final class MarkerSources
     {
         readNpcHighlights();
         npcs.clear();
+        inFront.clear();
         refreshNpcs(client.getTopLevelWorldView());
     }
 
@@ -225,6 +273,8 @@ final class MarkerSources
     {
         ground.clear();
         groundMarkers = null;
+        lineMarks.clear();
+        lineMarkers = null;
         objectMarkers.clear();
         agility.clear();
         visible = null;
@@ -313,6 +363,67 @@ final class MarkerSources
     {
         loadGround(wv, region, "ground:", tiles(region));
         if (config.tilePacks()) { loadGround(wv, region, "pack:", tilePacks.tiles(region)); }
+        for (LinePoint p : lines(region))
+        {
+            WorldPoint world = WorldPoint.fromRegion(region, p.regionX, p.regionY, p.z);
+            for (WorldPoint instance : WorldPoint.toLocalInstance(wv, world))
+            {
+                LocalPoint local = LocalPoint.fromWorld(wv, instance.getX(), instance.getY());
+                if (local != null) { lineMarks.add(new LineMark("line:" + wv.getId() + ":" + instance + ":" + p.edge, local, instance.getPlane(), p)); }
+            }
+        }
+    }
+
+    /** Config key prefix of a region's lines. */
+    static final String LINES = "lines_";
+    private final Map<Integer, String> lineJson = new HashMap<>();
+    private final Map<Integer, List<LinePoint>> linePoints = new HashMap<>();
+
+    /** A region's lines as saved, invalid ones left out; the list is shared: changes go through a copy. */
+    List<LinePoint> lines(int region)
+    {
+        String json = configs.getConfiguration(HdWorldMarkersConfig.GROUP, LINES + region);
+        if (json == null || json.isEmpty()) { return Collections.emptyList(); }
+        if (json.equals(lineJson.get(region))) { return linePoints.get(region); }
+        List<LinePoint> points = parseLines(gson, json);
+        points.removeIf(p -> p.regionId != region);
+        lineJson.put(region, json);
+        linePoints.put(region, Collections.unmodifiableList(points));
+        return linePoints.get(region);
+    }
+
+    /** Lines as saved here; invalid ones are left out, all when it is no list. */
+    static List<LinePoint> parseLines(Gson gson, String json)
+    {
+        List<LinePoint> points = new ArrayList<>();
+        if (json == null || json.isEmpty()) { return points; }
+        try
+        {
+            for (JsonElement element : gson.fromJson(json, JsonArray.class))
+            {
+                LinePoint p = gson.fromJson(element, LinePoint.class);
+                if (p != null && p.valid()) { points.add(p); }
+            }
+        }
+        catch (RuntimeException ex) { points.clear(); }
+        return points;
+    }
+
+    /** Whether any line is saved for the loaded area (for the double drawing warning). */
+    boolean anyLines() { return !lineMarks.isEmpty(); }
+
+    /** Your lines as markers: each in its own colour and width, along its side of its tile. */
+    private List<Marker> lineMarkers()
+    {
+        if (lineMarkers != null) { return lineMarkers; }
+        List<Marker> markers = new ArrayList<>(lineMarks.size());
+        for (LineMark l : lineMarks)
+        {
+            Marker m = layer(Marker.LINE, new Marker(l.key, l.point, l.plane, 1, 1, l.line.color, null, l.line.width, null));
+            m.edge = l.line.edge.ordinal();
+            markers.add(m);
+        }
+        return lineMarkers = markers;
     }
 
     private void loadGround(WorldView wv, int region, String prefix, List<TilePoint> points)
@@ -337,6 +448,7 @@ final class MarkerSources
         List<Marker> result = new ArrayList<>(groundMarkers());
         Player player = client.getLocalPlayer();
         if (player == null) { return new ArrayList<>(); }
+        result.addAll(lineMarkers());
         WorldView playerWorld = player.getWorldView();
         int plane = playerWorld.getPlane();
         // Path tiles first so tile indicators on the same tile are drawn on top.
@@ -782,10 +894,15 @@ final class MarkerSources
 
     /** A ground item appeared or went (marks of grace for the agility highlights). */
     void item(Tile tile, TileItem item, boolean spawned) { if (tile != null && item != null) { agility.item(tile, item, spawned); } }
-    void add(NPC npc) { npcs.remove(npc); if (isHighlighted(npc)) { npcs.add(npc); } }
-    void remove(NPC npc) { npcs.remove(npc); }
+    void add(NPC npc)
+    {
+        npcs.remove(npc); inFront.remove(npc);
+        if (isHighlighted(npc)) { npcs.add(npc); }
+        if (inFront(npc.getName())) { inFront.add(npc); }
+    }
+    void remove(NPC npc) { npcs.remove(npc); inFront.remove(npc); }
     /** A world view that loaded inside the scene (a boat): its markers, without rebuilding the rest. */
-    void addWorldView(WorldView wv) { removeWorldView(wv); visit(wv); visible = null; groundMarkers = null; }
+    void addWorldView(WorldView wv) { removeWorldView(wv); visit(wv); visible = null; groundMarkers = null; lineMarkers = null; }
 
     void removeWorldView(WorldView wv)
     {
@@ -793,14 +910,18 @@ final class MarkerSources
         objectMarkers.removeWorldView(wv);
         agility.removeWorldView(wv);
         npcs.removeIf(n -> n.getWorldView() == wv);
+        inFront.removeIf(n -> n.getWorldView() == wv);
         ground.removeIf(m -> m.point.getWorldView() == wv.getId());
         groundMarkers = null;
+        lineMarks.removeIf(l -> l.point.getWorldView() == wv.getId());
+        lineMarkers = null;
         visible = null;
     }
     void clear() { visible = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
         lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0;
-        ground.clear(); groundMarkers = null; npcs.clear(); objectMarkers.clear(); agility.clear(); styleNames.clear();
-        nameStyles.clear(); npcTags = Collections.emptyMap(); outlinesElsewhere = Collections.emptyList(); }
+        ground.clear(); groundMarkers = null; lineMarks.clear(); lineMarkers = null; npcs.clear(); objectMarkers.clear(); agility.clear(); styleNames.clear();
+        nameStyles.clear(); npcTags = Collections.emptyMap(); outlinesElsewhere = Collections.emptyList();
+        inFront.clear(); inFrontByName.clear(); inFrontNames = Collections.emptyList(); }
 
     /** A marked tile in the scene, or a Tile Packs pack's (pack). */
     private static final class Ground
@@ -815,6 +936,43 @@ final class MarkerSources
         {
             this.key = key; this.point = point; this.plane = plane; this.tile = tile; this.pack = pack;
         }
+    }
+
+    /** One of your lines in the scene. */
+    private static final class LineMark
+    {
+        final String key;
+        final LocalPoint point;
+        final int plane;
+        final LinePoint line;
+
+        LineMark(String key, LocalPoint point, int plane, LinePoint line) { this.key = key; this.point = point; this.plane = plane; this.line = line; }
+    }
+
+    /** A line as saved: its tile as Ground Markers' point format, the side it runs along, and its own colour and width. */
+    static final class LinePoint
+    {
+        final int regionId, regionX, regionY, z;
+        final HdWorldMarkersConfig.Edge edge;
+        final Color color;
+        final double width;
+
+        LinePoint(int regionId, int regionX, int regionY, int z, HdWorldMarkersConfig.Edge edge, Color color, double width)
+        {
+            this.regionId = regionId; this.regionX = regionX; this.regionY = regionY; this.z = z; this.edge = edge; this.color = color; this.width = width;
+        }
+
+        boolean valid()
+        {
+            return regionId >= 0 && regionId <= 0xFFFF && regionX >= 0 && regionX <= 63 && regionY >= 0 && regionY <= 63 && z >= 0 && z <= 3
+                && edge != null && color != null && width >= 0 && width <= 10;
+        }
+
+        /** The same line: on the same side of the same tile. */
+        boolean same(LinePoint o) { return regionId == o.regionId && regionX == o.regionX && regionY == o.regionY && z == o.z && edge == o.edge; }
+
+        /** The same line with this side. */
+        LinePoint turned(HdWorldMarkersConfig.Edge edge) { return new LinePoint(regionId, regionX, regionY, z, edge, color, width); }
     }
 
     /** A marked tile as saved: Ground Markers' point format. */

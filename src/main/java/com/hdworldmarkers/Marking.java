@@ -45,6 +45,8 @@ import java.awt.Color;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseWheelEvent;
 import java.util.*;
 import java.util.function.Consumer;
 import javax.inject.Inject;
@@ -52,6 +54,7 @@ import javax.inject.Singleton;
 import javax.swing.SwingUtilities;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
@@ -63,6 +66,10 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.game.chatbox.ChatboxPanelManager;
+import net.runelite.client.input.KeyListener;
+import net.runelite.client.input.KeyManager;
+import net.runelite.client.input.MouseManager;
+import net.runelite.client.input.MouseWheelListener;
 import net.runelite.client.menus.MenuManager;
 import net.runelite.client.menus.WidgetMenuOption;
 import net.runelite.client.plugins.Plugin;
@@ -74,10 +81,11 @@ import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
 
 /**
- * Marking with Shift + right-click: tiles (Mark, Unmark, Label), objects (Mark object, Unmark object) and NPCs by name
- * (Tag-All, Un-tag-All), saved in HD World Markers' own settings. Tiles can be imported from and exported to
- * the clipboard in Ground Markers' format. The marks of Ground Markers, Object Markers and NPC Indicators are copied
- * when HD World Markers first starts in a profile, and again with Sync.
+ * Marking with Shift + right-click: tiles (Mark, Unmark, Label), lines along a tile's sides (Add line, Remove line; the
+ * mouse wheel turns a new line while Shift is held), objects (Mark object, Unmark object) and NPCs by name (Tag-All,
+ * Un-tag-All), saved in HD World Markers' own settings. Tiles can be imported from and exported to the clipboard in
+ * Ground Markers' format. The marks of Ground Markers, Line Markers, Object Markers and NPC Indicators are copied when
+ * HD World Markers first starts in a profile, and again with Sync.
  */
 @Singleton
 final class Marking
@@ -97,7 +105,7 @@ final class Marking
     static final String COPIED = "tookOverMarkingPlugins3";
     /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
     private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators",
-        TILE_INDICATORS = "tileindicators", AGILITY = "agility", BETTER_NPC_HIGHLIGHT = "BetterNpcHighlight";
+        TILE_INDICATORS = "tileindicators", AGILITY = "agility", BETTER_NPC_HIGHLIGHT = "BetterNpcHighlight", LINE_MARKERS = "linemarkers";
 
     private final Client client;
     private final ClientThread clientThread;
@@ -111,29 +119,55 @@ final class Marking
     private final Gson gson;
     private final ColorPickerManager colorPickers;
     private final PluginManager plugins;
+    private final KeyManager keys;
+    private final MouseManager mouse;
+    /** The line just added, which the mouse wheel turns while Shift stays held; null once it is released. */
+    private volatile MarkerSources.LinePoint lastLine;
+    /** The line added or turned last, and its tile: Extend line on a tile in line with it fills the tiles between. */
+    private MarkerSources.LinePoint extendFrom;
+    private WorldPoint extendAt;
+    /** Tiles Extend line fills at most. */
+    private static final int MAX_EXTEND = 64;
+    final KeyListener shiftListener = new KeyListener()
+    {
+        @Override public void keyTyped(KeyEvent e) { }
+        @Override public void keyPressed(KeyEvent e) { }
+        @Override public void keyReleased(KeyEvent e) { if (e.getKeyCode() == KeyEvent.VK_SHIFT) { lastLine = null; } }
+    };
+    private final MouseWheelListener wheelListener = this::wheel;
 
     @Inject
     Marking(Client client, ClientThread clientThread, ConfigManager configs, HdWorldMarkersConfig config, MarkerSources sources,
         ObjectMarkerSource objects, MenuManager menus, ChatboxPanelManager chatbox, ChatMessageManager chat, Gson gson,
-        ColorPickerManager colorPickers, PluginManager plugins)
+        ColorPickerManager colorPickers, PluginManager plugins, KeyManager keys, MouseManager mouse)
     {
         this.client = client; this.clientThread = clientThread; this.configs = configs; this.config = config; this.sources = sources;
         this.objects = objects; this.menus = menus; this.chatbox = chatbox; this.chat = chat; this.gson = gson;
-        this.colorPickers = colorPickers; this.plugins = plugins;
+        this.colorPickers = colorPickers; this.plugins = plugins; this.keys = keys; this.mouse = mouse;
     }
 
     void startUp()
     {
         importExportOptions();
+        lastLine = null;
+        keys.registerKeyListener(shiftListener);
+        mouse.registerMouseWheelListener(wheelListener);
         clientThread.invokeLater(this::copyOnce);
     }
 
     void shutDown()
     {
         removeOptions();
+        keys.unregisterKeyListener(shiftListener);
+        mouse.unregisterMouseWheelListener(wheelListener);
+        lastLine = null;
+        extendFrom = null; extendAt = null;
         pendingNotice = null;
         profileSwitched = false;
     }
+
+    /** A key released while the client had no focus never arrives: the line would stay turnable. */
+    @Subscribe public void onFocusChanged(FocusChanged e) { if (!e.isFocused()) { lastLine = null; } }
 
     private void removeOptions()
     {
@@ -153,7 +187,123 @@ final class Marking
     @Subscribe
     public void onConfigChanged(ConfigChanged e)
     {
-        if (HdWorldMarkersConfig.GROUP.equals(e.getGroup()) && "showImportExport".equals(e.getKey())) { importExportOptions(); }
+        String group = e.getGroup(), key = e.getKey();
+        if (HdWorldMarkersConfig.GROUP.equals(group)) { if ("showImportExport".equals(key)) { importExportOptions(); } return; }
+        if (!config.followOtherPlugins() || key == null) { return; }
+        // The other marking plugins' saved marks changed: what they added is added here, what they took away is taken away.
+        // Their settings are only read; the change is made on the client thread, which reads and draws the marks.
+        String before = e.getOldValue(), after = e.getNewValue();
+        if (GROUND_MARKERS.equals(group) && key.startsWith("region_")) { clientThread.invokeLater(() -> followTiles(key, before, after)); }
+        else if (OBJECT_MARKERS.equals(group) && key.startsWith("region_")) { clientThread.invokeLater(() -> followObjects(key, before, after)); }
+        else if (NPC_INDICATORS.equals(group) && "npcToHighlight".equals(key)) { clientThread.invokeLater(() -> followNpcIndicators(before, after)); }
+        else if (NPC_INDICATORS.equals(group) && (key.startsWith("tagstyle_") || key.startsWith("highlightcolor_")))
+        { clientThread.invokeLater(() -> { copyNpcNames(); copyNpcColors(); }); }
+        else if (BETTER_NPC_HIGHLIGHT.equals(group) && (key.endsWith("Names") || key.endsWith("Ids"))) { clientThread.invokeLater(() -> followBetterNpcHighlight(key, before, after)); }
+        else if (LINE_MARKERS.equals(group) && "markers".equals(key)) { clientThread.invokeLater(() -> followLines(before, after)); }
+    }
+
+    /** The number after region_ in a key, or -1. */
+    private static int region(String key)
+    {
+        try { return Integer.parseInt(key.substring("region_".length())); }
+        catch (NumberFormatException ex) { return -1; }
+    }
+
+    /** Ground Markers' tiles of a region changed: its new tiles are added here, the tiles it lost are unmarked here. */
+    private void followTiles(String key, String before, String after)
+    {
+        int region = region(key);
+        if (region < 0) { return; }
+        List<MarkerSources.TilePoint> was = MarkerSources.parse(gson, before), now = MarkerSources.parse(gson, after);
+        List<MarkerSources.TilePoint> points = new ArrayList<>(sources.tiles(region));
+        boolean changed = points.removeIf(p -> was.stream().anyMatch(p::same) && now.stream().noneMatch(p::same));
+        for (MarkerSources.TilePoint p : now)
+        {
+            if (p.regionId == region && was.stream().noneMatch(p::same) && points.stream().noneMatch(p::same)) { points.add(p); changed = true; }
+        }
+        if (changed) { saveTiles(region, points); }
+    }
+
+    /** Object Markers' objects of a region changed: as followTiles. */
+    private void followObjects(String key, String before, String after)
+    {
+        int region = region(key);
+        if (region < 0) { return; }
+        List<ObjectMarkerSource.ObjectPoint> was = ObjectMarkerSource.parse(gson, before), now = ObjectMarkerSource.parse(gson, after);
+        List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
+        boolean changed = points.removeIf(p -> was.stream().anyMatch(p::same) && now.stream().noneMatch(p::same));
+        for (ObjectMarkerSource.ObjectPoint p : now)
+        {
+            if (was.stream().noneMatch(p::same) && points.stream().noneMatch(p::same)) { points.add(p); changed = true; }
+        }
+        if (changed) { saveObjects(region, points); }
+    }
+
+    /** NPC Indicators' names changed: new names are tagged here as Sync tags them, names it lost leave every list here. */
+    private void followNpcIndicators(String before, String after)
+    {
+        Set<String> was = new HashSet<>(), now = new HashSet<>();
+        for (String n : Text.fromCSV(Strings.nullToEmpty(before))) { was.add(Text.removeTags(n).trim().toLowerCase()); }
+        for (String n : Text.fromCSV(Strings.nullToEmpty(after))) { now.add(Text.removeTags(n).trim().toLowerCase()); }
+        NameLists lists = new NameLists();
+        for (String name : was)
+        {
+            if (name.isEmpty() || now.contains(name)) { continue; }
+            for (NpcStyle style : NpcStyle.values()) { lists.set(style, name, false); }
+        }
+        lists.save();
+        copyNpcNames();
+    }
+
+    /** Better NPC Highlight's names or IDs of a style changed: new ones are taken as Sync takes them, lost ones leave that style's list. */
+    private void followBetterNpcHighlight(String key, String before, String after)
+    {
+        boolean ids = key.endsWith("Ids");
+        String option = key.substring(0, key.length() - (ids ? 3 : 5));
+        NpcStyle style = null;
+        for (NpcStyle s : NpcStyle.values()) { if (BETTER_NPC_HIGHLIGHT_STYLES[s.ordinal()].equals(option)) { style = s; } }
+        if (style == null) { return; }
+        Set<String> now = betterNames(after, ids);
+        NameLists lists = new NameLists();
+        for (String name : betterNames(before, ids)) { if (!now.contains(name)) { lists.set(style, name, false); } }
+        lists.save();
+        copyBetterNpcHighlight();
+    }
+
+    /** The names in one of Better NPC Highlight's lists (names, or IDs as the NPCs' names), lower case. */
+    private Set<String> betterNames(String list, boolean ids)
+    {
+        Set<String> names = new HashSet<>();
+        for (String entry : list == null ? new String[0] : list.split(ids ? "," : "(?<!\\\\),"))
+        {
+            String name = entry.split(":")[0].trim();
+            if (ids)
+            {
+                try { name = npcName(Integer.parseInt(name)); } catch (NumberFormatException ex) { name = null; }
+            }
+            else { name = Text.removeTags(name).toLowerCase(); }
+            if (name != null && !name.isEmpty() && !name.contains("\\")) { names.add(name); }
+        }
+        return names;
+    }
+
+    /** Line Markers' lines changed: new lines of its shown groups are added here, lines it lost are taken away here. */
+    private void followLines(String before, String after)
+    {
+        List<MarkerSources.LinePoint> was = theirLines(before), now = theirLines(after);
+        Map<Integer, List<MarkerSources.LinePoint>> regions = new HashMap<>();
+        for (MarkerSources.LinePoint p : was) { regions.computeIfAbsent(p.regionId, r -> new ArrayList<>()); }
+        for (MarkerSources.LinePoint p : now) { regions.computeIfAbsent(p.regionId, r -> new ArrayList<>()); }
+        for (int region : regions.keySet())
+        {
+            List<MarkerSources.LinePoint> lines = new ArrayList<>(sources.lines(region));
+            boolean changed = lines.removeIf(l -> was.stream().anyMatch(l::same) && now.stream().noneMatch(l::same));
+            for (MarkerSources.LinePoint p : now)
+            {
+                if (p.regionId == region && was.stream().noneMatch(p::same) && lines.stream().noneMatch(p::same)) { lines.add(p); changed = true; }
+            }
+            if (changed) { saveLines(region, lines); }
+        }
     }
 
     /**
@@ -196,7 +346,11 @@ final class Marking
         if (!client.isKeyPressed(KeyCode.KC_SHIFT)) { return; }
         MenuEntry entry = event.getMenuEntry();
         MenuAction action = entry.getType();
-        if ((action == MenuAction.WALK || action == MenuAction.SET_HEADING) && config.markTiles()) { tileOptions(entry); }
+        if (action == MenuAction.WALK || action == MenuAction.SET_HEADING)
+        {
+            if (config.markTiles()) { tileOptions(entry); }
+            if (config.markLines()) { lineOptions(entry); }
+        }
         else if (action == MenuAction.EXAMINE_OBJECT && config.markObjects()) { objectOptions(event); }
         else if (action == MenuAction.EXAMINE_NPC && config.tagNpcs()) { npcOptions(event); }
     }
@@ -262,6 +416,122 @@ final class Marking
     }
 
     private void colorTile(MarkerSources.TilePoint marked, Color color) { replaceTile(marked, color, marked.label); }
+
+    // Lines
+
+    /** Add line, and Remove line while the tile has one. */
+    private void lineOptions(MenuEntry entry)
+    {
+        WorldView wv = client.getWorldView(entry.getWorldViewId());
+        Tile tile = wv == null ? null : wv.getSelectedSceneTile();
+        if (tile == null) { return; }
+        WorldPoint point = WorldPoint.fromLocalInstance(client, tile.getLocalLocation());
+        client.getMenu().createMenuEntry(-1).setOption("Add line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> addLine(point));
+        MarkerSources.LinePoint last = lastLineOn(point);
+        if (last != null)
+        {
+            client.getMenu().createMenuEntry(-2).setOption("Remove line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> removeLine(last));
+        }
+        List<WorldPoint> run = extendRun(point);
+        if (run != null)
+        {
+            client.getMenu().createMenuEntry(-3).setOption("Extend line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> extendLine(run));
+        }
+    }
+
+    /**
+     * The tiles from the line added or turned last (left out) to this tile, when the tile lies in line with it along its
+     * side: along y for a line on the west or east side, along x for one on the south or north side; null otherwise.
+     */
+    private List<WorldPoint> extendRun(WorldPoint to)
+    {
+        if (extendFrom == null || extendAt == null || to.getPlane() != extendAt.getPlane() || to.equals(extendAt)) { return null; }
+        boolean vertical = extendFrom.edge == HdWorldMarkersConfig.Edge.WEST || extendFrom.edge == HdWorldMarkersConfig.Edge.EAST;
+        if (vertical ? to.getX() != extendAt.getX() : to.getY() != extendAt.getY()) { return null; }
+        int steps = vertical ? to.getY() - extendAt.getY() : to.getX() - extendAt.getX();
+        if (Math.abs(steps) > MAX_EXTEND) { return null; }
+        List<WorldPoint> run = new ArrayList<>();
+        int sign = Integer.signum(steps);
+        for (int i = 1; i <= Math.abs(steps); i++) { run.add(vertical ? extendAt.dy(i * sign) : extendAt.dx(i * sign)); }
+        return run;
+    }
+
+    /** Lines on the same side, in the same colour and width as the last one, on every tile of the run that has none there yet. */
+    private void extendLine(List<WorldPoint> run)
+    {
+        MarkerSources.LinePoint from = extendFrom;
+        if (from == null || run.isEmpty()) { return; }
+        Map<Integer, List<MarkerSources.LinePoint>> regions = new HashMap<>();
+        for (WorldPoint tile : run)
+        {
+            MarkerSources.LinePoint line = new MarkerSources.LinePoint(tile.getRegionID(), tile.getRegionX(), tile.getRegionY(), tile.getPlane(), from.edge, from.color, from.width);
+            List<MarkerSources.LinePoint> lines = regions.computeIfAbsent(line.regionId, r -> new ArrayList<>(sources.lines(r)));
+            if (lines.stream().noneMatch(line::same)) { lines.add(line); }
+            extendFrom = line; extendAt = tile;
+        }
+        for (Map.Entry<Integer, List<MarkerSources.LinePoint>> region : regions.entrySet()) { saveLines(region.getKey(), region.getValue()); }
+    }
+
+    /** The line added last on this tile, or null. */
+    private MarkerSources.LinePoint lastLineOn(WorldPoint point)
+    {
+        List<MarkerSources.LinePoint> lines = sources.lines(point.getRegionID());
+        for (int i = lines.size() - 1; i >= 0; i--)
+        {
+            MarkerSources.LinePoint p = lines.get(i);
+            if (p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane()) { return p; }
+        }
+        return null;
+    }
+
+    /**
+     * A line on the tile's side of the Line side option, in the Line color and Line width: the wheel turns it while
+     * Shift stays held. A line already on that side is the one turned instead.
+     */
+    private void addLine(WorldPoint point)
+    {
+        MarkerSources.LinePoint line = new MarkerSources.LinePoint(point.getRegionID(), point.getRegionX(), point.getRegionY(), point.getPlane(),
+            config.lineEdge(), config.lineColor(), config.lineWidth());
+        List<MarkerSources.LinePoint> lines = new ArrayList<>(sources.lines(line.regionId));
+        MarkerSources.LinePoint there = lines.stream().filter(line::same).findFirst().orElse(null);
+        if (there == null) { lines.add(line); saveLines(line.regionId, lines); }
+        lastLine = there != null ? there : line;
+        extendFrom = lastLine; extendAt = point;
+    }
+
+    private void removeLine(MarkerSources.LinePoint line)
+    {
+        List<MarkerSources.LinePoint> lines = new ArrayList<>(sources.lines(line.regionId));
+        if (lines.removeIf(line::same)) { saveLines(line.regionId, lines); }
+        if (lastLine != null && lastLine.same(line)) { lastLine = null; }
+        if (extendFrom != null && extendFrom.same(line)) { extendFrom = null; extendAt = null; }
+    }
+
+    /** The mouse wheel, with Shift held after Add line: the line goes to its next side (wheel down) or the one before. */
+    MouseWheelEvent wheel(MouseWheelEvent e)
+    {
+        MarkerSources.LinePoint line = lastLine;
+        if (line == null || !client.isKeyPressed(KeyCode.KC_SHIFT)) { return e; }
+        HdWorldMarkersConfig.Edge[] edges = HdWorldMarkersConfig.Edge.values();
+        HdWorldMarkersConfig.Edge next = edges[(line.edge.ordinal() + (e.getWheelRotation() > 0 ? 1 : edges.length - 1)) % edges.length];
+        lastLine = line.turned(next);
+        clientThread.invokeLater(() -> turnLine(line, next));
+        e.consume();
+        return e;
+    }
+
+    /** The line saved again on this side; a line already there is left and this one taken away. */
+    private void turnLine(MarkerSources.LinePoint line, HdWorldMarkersConfig.Edge edge)
+    {
+        List<MarkerSources.LinePoint> lines = new ArrayList<>(sources.lines(line.regionId));
+        if (!lines.removeIf(line::same)) { return; }
+        MarkerSources.LinePoint turned = line.turned(edge);
+        if (lines.stream().noneMatch(turned::same)) { lines.add(turned); }
+        saveLines(line.regionId, lines);
+        if (extendFrom != null && extendFrom.same(line)) { extendFrom = turned; }
+    }
+
+    private void saveLines(int region, List<MarkerSources.LinePoint> lines) { save(MarkerSources.LINES + region, lines, lines.isEmpty()); }
 
     /** The marked tile saved again with this color and label. */
     private void replaceTile(MarkerSources.TilePoint marked, Color color, String label)
@@ -403,32 +673,46 @@ final class Marking
     {
         Map<Integer, List<MarkerSources.TilePoint>> regions = new HashMap<>();
         for (MarkerSources.TilePoint p : imported) { regions.computeIfAbsent(p.regionId, r -> new ArrayList<>()).add(p); }
-        int added = addTiles(regions);
+        int added = addTiles(regions, false);
         message(added + " tile markers were imported from the clipboard.");
     }
 
-    /** Adds tiles to those marked in their region; tiles marked already stay as they are. Returns how many were new. */
-    private int addTiles(Map<Integer, List<MarkerSources.TilePoint>> regions)
+    /**
+     * Adds tiles to those marked in their region; a tile marked already stays as it is (an import, as Ground Markers'),
+     * or with theirs takes the colour and label the added one has of its own (Sync). Returns how many were new or changed.
+     */
+    private int addTiles(Map<Integer, List<MarkerSources.TilePoint>> regions, boolean theirs)
     {
-        int added = 0;
+        int changed = 0;
         for (Map.Entry<Integer, List<MarkerSources.TilePoint>> region : regions.entrySet())
         {
             List<MarkerSources.TilePoint> merged = new ArrayList<>(sources.tiles(region.getKey()));
-            int before = merged.size();
+            int before = changed;
             for (MarkerSources.TilePoint p : region.getValue())
             {
-                if (merged.stream().noneMatch(p::same)) { merged.add(p); }
+                int at = -1;
+                for (int i = 0; i < merged.size() && at < 0; i++) { if (merged.get(i).same(p)) { at = i; } }
+                if (at < 0) { merged.add(p); changed++; continue; }
+                if (!theirs) { continue; }
+                MarkerSources.TilePoint own = merged.get(at);
+                Color color = p.color != null ? p.color : own.color;
+                String label = p.label != null ? p.label : own.label;
+                if (!Objects.equals(color, own.color) || !Objects.equals(label, own.label))
+                {
+                    merged.set(at, new MarkerSources.TilePoint(own.regionId, own.regionX, own.regionY, own.z, color, label));
+                    changed++;
+                }
             }
-            if (merged.size() > before) { saveTiles(region.getKey(), merged); added += merged.size() - before; }
+            if (changed > before) { saveTiles(region.getKey(), merged); }
         }
-        return added;
+        return changed;
     }
 
     // Copying other plugins' marks
 
     /** The plugins whose marks and options a first start takes over: settings group, name. */
     private static final String[][] PLUGINS = {
-        {GROUND_MARKERS, "Ground Markers"}, {OBJECT_MARKERS, "Object Markers"}, {NPC_INDICATORS, "NPC Indicators"},
+        {GROUND_MARKERS, "Ground Markers"}, {LINE_MARKERS, "Line Markers"}, {OBJECT_MARKERS, "Object Markers"}, {NPC_INDICATORS, "NPC Indicators"},
         {BETTER_NPC_HIGHLIGHT, "Better NPC Highlight"}, {TILE_INDICATORS, "Tile Indicators"}, {AGILITY, "Agility"},
     };
 
@@ -497,16 +781,21 @@ final class Marking
         configs.setConfiguration(HdWorldMarkersConfig.GROUP, COPIED, "true");
         boolean better = betterNpcHighlight();
         Set<String> from = copySettings(better);
-        int tiles = copyGroundMarkers(), objectCount = copyObjectMarkers();
-        int names = better ? copyBetterNpcHighlight() : copyNpcNames(), colors = better ? 0 : copyNpcColors();
+        int tiles = copyGroundMarkers(), lineCount = copyLineMarkers(), objectCount = copyObjectMarkers();
+        // Names from both NPC plugins (they only add); the colors per NPC from NPC Indicators unless Better NPC Highlight
+        // is installed, whose colors per style copySettings took.
+        int indicatorNames = copyNpcNames(), betterNames = better ? copyBetterNpcHighlight() : 0, colors = better ? 0 : copyNpcColors();
+        int names = indicatorNames + betterNames;
         if (tiles > 0) { from.add(GROUND_MARKERS); }
+        if (lineCount > 0) { from.add(LINE_MARKERS); }
         if (objectCount > 0) { from.add(OBJECT_MARKERS); }
-        if (names + colors > 0) { from.add(better ? BETTER_NPC_HIGHLIGHT : NPC_INDICATORS); }
+        if (indicatorNames + colors > 0) { from.add(NPC_INDICATORS); }
+        if (betterNames > 0) { from.add(BETTER_NPC_HIGHLIGHT); }
         if (from.isEmpty()) { return; }
         // Which of them still draw the same is OverlapWarnings' to say.
         List<String> plugins = new ArrayList<>();
         for (String[] plugin : PLUGINS) { if (from.contains(plugin[0])) { plugins.add(plugin[1]); } }
-        String marks = describe(tiles, objectCount, names);
+        String marks = describe(tiles, lineCount, objectCount, names);
         notice("HD World Markers took over your marks and settings from " + Chat.list(plugins) + (marks == null ? "" : " (" + marks + ")") + "."
             + " Sync on the world map orb copies what you mark there later.");
     }
@@ -563,33 +852,58 @@ final class Marking
         return "true".equals(value != null ? value : String.valueOf(option.equals("highlightHull")));
     }
 
-    /** Sync: what the other plugins marked since is copied. */
+    /** Sync: everything the other plugins have marked is copied, what is here already as they have it now. */
     private void sync()
     {
         String copied = copyOtherMarks();
-        message(copied == null ? "No new marks in Ground Markers, Object Markers or " + (betterNpcHighlight() ? "Better NPC Highlight" : "NPC Indicators") + "."
-            : "Copied " + copied + ".");
+        message(copied == null ? "Nothing new to copy: " + theirs() + " are all here already." : "Copied " + copied + ". " + theirs() + ".");
+    }
+
+    /** What the other plugins hold: "Ground Markers 277 tiles, Object Markers 8 objects, NPC Indicators 114 names". */
+    private String theirs()
+    {
+        int tiles = 0, objectCount = 0, lineCount = theirLines(configs.getConfiguration(LINE_MARKERS, "markers")).size();
+        for (int region : regions(GROUND_MARKERS)) { tiles += MarkerSources.parse(gson, configs.getConfiguration(GROUND_MARKERS, "region_" + region)).size(); }
+        for (int region : regions(OBJECT_MARKERS)) { objectCount += ObjectMarkerSource.parse(gson, configs.getConfiguration(OBJECT_MARKERS, "region_" + region)).size(); }
+        int names = Text.fromCSV(Strings.nullToEmpty(configs.getConfiguration(NPC_INDICATORS, "npcToHighlight"))).size();
+        List<String> parts = new ArrayList<>();
+        parts.add("Ground Markers " + tiles + (tiles == 1 ? " tile" : " tiles"));
+        parts.add("Object Markers " + objectCount + (objectCount == 1 ? " object" : " objects"));
+        parts.add("NPC Indicators " + names + (names == 1 ? " name" : " names"));
+        if (betterNpcHighlight())
+        {
+            int better = 0;
+            for (String option : BETTER_NPC_HIGHLIGHT_STYLES)
+            {
+                better += betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Names"), false).size()
+                    + betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids"), true).size();
+            }
+            parts.add("Better NPC Highlight " + better + (better == 1 ? " name" : " names"));
+        }
+        if (lineCount > 0) { parts.add("Line Markers " + lineCount + (lineCount == 1 ? " line" : " lines")); }
+        return Chat.list(parts);
     }
 
     /**
-     * Copies what Ground Markers, Object Markers and NPC Indicators (Better NPC Highlight when it is installed) saved and is
-     * not marked here yet; their settings are only read. Returns what was copied ("12 tiles and 2 NPC names"), or null
-     * when nothing was new.
+     * Copies what Ground Markers, Line Markers, Object Markers and NPC Indicators (Better NPC Highlight when it is
+     * installed) saved and is not marked here yet; their settings are only read. Returns what was copied ("12 tiles and
+     * 2 NPC names"), or null when nothing was new.
      */
     String copyOtherMarks()
     {
         boolean better = betterNpcHighlight();
-        int tiles = copyGroundMarkers(), objectCount = copyObjectMarkers();
-        int names = better ? copyBetterNpcHighlight() : copyNpcNames(), colors = better ? 0 : copyNpcColors();
-        String marks = describe(tiles, objectCount, names);
+        int tiles = copyGroundMarkers(), lineCount = copyLineMarkers(), objectCount = copyObjectMarkers();
+        int names = copyNpcNames() + (better ? copyBetterNpcHighlight() : 0), colors = better ? 0 : copyNpcColors();
+        String marks = describe(tiles, lineCount, objectCount, names);
         return marks == null && colors > 0 ? colors + " NPC color" + (colors == 1 ? "" : "s") : marks;
     }
 
-    /** "12 tiles, 3 objects and 2 NPC names", or null when all are 0. */
-    private static String describe(int tiles, int objectCount, int names)
+    /** "12 tiles, 2 lines, 3 objects and 2 NPC names", or null when all are 0. */
+    private static String describe(int tiles, int lines, int objectCount, int names)
     {
         List<String> parts = new ArrayList<>();
         count(parts, tiles, "tile");
+        count(parts, lines, "line");
         count(parts, objectCount, "object");
         count(parts, names, "NPC name");
         return parts.isEmpty() ? null : Chat.list(parts);
@@ -606,7 +920,57 @@ final class Marking
             points.removeIf(p -> p.regionId != region);
             regions.put(region, points);
         }
-        return addTiles(regions);
+        return addTiles(regions, true);
+    }
+
+    /** A line as Line Markers saves it (its colour as RuneLite's Gson writes colours), in a group that may be hidden. */
+    private static final class TheirLine { Color colour; HdWorldMarkersConfig.Edge edge; double width; WorldPoint location; }
+    private static final class TheirGroup { boolean visible = true; List<TheirLine> lines; }
+
+    /** Line Markers' lines as saved (its setting markers: groups of lines), of its groups that show, as lines here; none for an unreadable save. */
+    private List<MarkerSources.LinePoint> theirLines(String json)
+    {
+        List<MarkerSources.LinePoint> lines = new ArrayList<>();
+        if (Strings.isNullOrEmpty(json)) { return lines; }
+        List<TheirGroup> groups;
+        try { groups = gson.fromJson(json, new com.google.gson.reflect.TypeToken<List<TheirGroup>>() { }.getType()); }
+        catch (RuntimeException ex) { return lines; }
+        for (TheirGroup group : groups == null ? Collections.<TheirGroup>emptyList() : groups)
+        {
+            if (group == null || !group.visible || group.lines == null) { continue; }
+            for (TheirLine l : group.lines)
+            {
+                if (l == null || l.location == null || l.edge == null) { continue; }
+                WorldPoint at = l.location;
+                MarkerSources.LinePoint p = new MarkerSources.LinePoint(at.getRegionID(), at.getRegionX(), at.getRegionY(), at.getPlane(), l.edge,
+                    l.colour == null ? config.lineColor() : l.colour, Math.max(0, Math.min(10, l.width)));
+                if (p.valid()) { lines.add(p); }
+            }
+        }
+        return lines;
+    }
+
+    /** Line Markers' lines not saved here yet, from its groups that show. Returns how many were new. */
+    private int copyLineMarkers()
+    {
+        Map<Integer, List<MarkerSources.LinePoint>> regions = new HashMap<>();
+        for (MarkerSources.LinePoint p : theirLines(configs.getConfiguration(LINE_MARKERS, "markers"))) { regions.computeIfAbsent(p.regionId, r -> new ArrayList<>()).add(p); }
+        int added = 0;
+        for (Map.Entry<Integer, List<MarkerSources.LinePoint>> region : regions.entrySet())
+        {
+            List<MarkerSources.LinePoint> merged = new ArrayList<>(sources.lines(region.getKey()));
+            int before = added;
+            for (MarkerSources.LinePoint p : region.getValue())
+            {
+                int at = -1;
+                for (int i = 0; i < merged.size() && at < 0; i++) { if (merged.get(i).same(p)) { at = i; } }
+                if (at < 0) { merged.add(p); added++; }
+                // Here already: Line Markers' colour and width when they differ.
+                else if (!Objects.equals(merged.get(at).color, p.color) || merged.get(at).width != p.width) { merged.set(at, p); added++; }
+            }
+            if (added > before) { saveLines(region.getKey(), merged); }
+        }
+        return added;
     }
 
     private int copyObjectMarkers()
@@ -620,9 +984,11 @@ final class Marking
             {
                 ObjectMarkerSource.ObjectPoint own = points.stream().filter(p::same).findFirst().orElse(null);
                 if (own == null) { points.add(p); changed++; }
-                // Marked here too, without a color or style of its own: Object Markers' are taken.
-                else if (!own.hasLook() && p.hasLook()) { own.borderColor = p.borderColor; own.fillColor = p.fillColor;
-                    own.hull = p.hull; own.outline = p.outline; own.clickbox = p.clickbox; own.tile = p.tile; changed++; }
+                // Marked here too: Object Markers' colors and style are taken when it has any and they differ.
+                else if (p.hasLook() && !(Objects.equals(own.borderColor, p.borderColor) && Objects.equals(own.fillColor, p.fillColor)
+                    && Objects.equals(own.hull, p.hull) && Objects.equals(own.outline, p.outline) && Objects.equals(own.clickbox, p.clickbox)
+                    && Objects.equals(own.tile, p.tile)))
+                { own.borderColor = p.borderColor; own.fillColor = p.fillColor; own.hull = p.hull; own.outline = p.outline; own.clickbox = p.clickbox; own.tile = p.tile; changed++; }
             }
             if (changed > 0) { saveObjects(region, points); added += changed; }
         }
@@ -704,8 +1070,8 @@ final class Marking
     private static final String[] BETTER_NPC_HIGHLIGHT_STYLES = {"hull", "tile", "trueTile", "swTile", "swTrueTile", "outline", "clickbox"};
 
     /**
-     * Better NPC Highlight's names per style, of the styles it has on, into the same style's list here. Only its name
-     * lists: its ID lists are left alone (no IDs here), as is a name's preset (":2"). Returns how many names were new.
+     * Better NPC Highlight's names per style, of the styles it has on, into the same style's list here, and the NPCs of
+     * its ID lists by their names (no IDs here); a name's preset (":2") is left. Returns how many names were new.
      */
     private int copyBetterNpcHighlight()
     {
@@ -723,6 +1089,16 @@ final class Marking
                 if (name.isEmpty() || name.contains("\\") || lists.has(style, name)) { continue; }
                 lists.set(style, name, true);
                 added.add(name.toLowerCase());
+            }
+            String ids = configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids");
+            for (String entry : ids == null ? new String[0] : ids.split(","))
+            {
+                String name;
+                try { name = npcName(Integer.parseInt(entry.split(":")[0].trim())); }
+                catch (NumberFormatException ex) { continue; }
+                if (name == null || lists.has(style, name)) { continue; }
+                lists.set(style, name, true);
+                added.add(name);
             }
         }
         lists.save();
@@ -898,6 +1274,24 @@ final class Marking
                 .onClick(e -> tagAll(name));
         }
         if (tagged || pattern) { npcMenus(event.getTarget(), name); }
+        if (config.npcsInFrontOfTiles()) { inFrontOption(event.getTarget(), name); }
+    }
+
+    /** In front or Not in front: the name joins In front names or leaves it. A name a pattern there matches has neither. */
+    private void inFrontOption(String target, String name)
+    {
+        List<String> names = MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT);
+        boolean listed = names.stream().anyMatch(name::equalsIgnoreCase);
+        if (!listed && names.stream().anyMatch(n -> n.contains("*") && WildcardMatcher.matches(n, name))) { return; }
+        client.getMenu().createMenuEntry(-1).setOption(listed ? "Not in front" : "In front").setTarget(target).setType(MenuAction.RUNELITE)
+            .onClick(e -> {
+                List<String> now = new ArrayList<>(MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT));
+                boolean removed = now.removeIf(name::equalsIgnoreCase);
+                if (!removed) { now.add(name); }
+                if (now.isEmpty()) { configs.unsetConfiguration(HdWorldMarkersConfig.GROUP, MarkerSources.NPC_IN_FRONT); }
+                else { configs.setConfiguration(HdWorldMarkersConfig.GROUP, MarkerSources.NPC_IN_FRONT, Text.toCSV(now)); }
+                message(name + (removed ? " is no longer kept in front of the marks." : " is kept in front of the marks" + (config.tilesThroughWalls() ? "." : ", once Through walls is on.")));
+            });
     }
 
     /** The Tag styles option, without what an unknown saved style reads as; none for an unreadable save. */

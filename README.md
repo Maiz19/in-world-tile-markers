@@ -12,7 +12,7 @@ Left: RuneLite's normal markers in Stretched Mode. Right: HD World Markers.
 | ![Tiles before](docs/images/tiles-before.png) | ![Tiles after](docs/images/tiles-after.png) |
 | ![Clickbox before](docs/images/clickbox-before.png) | ![Clickbox after](docs/images/clickbox-after.png) |
 
-Mark tiles, objects and NPCs with Shift + right-click, as with RuneLite's own marking plugins. Your marks from those are copied over on the first start, and the tile packs you turned on are drawn too. It also draws agility obstacles, shortcuts and marks of grace, your destination, hovered and current tile and the path you walk, and other plugins can send it marks to draw.
+Mark tiles, lines along tile sides, objects and NPCs with Shift + right-click, as with RuneLite's own marking plugins and Line Markers. Your marks from those are copied over on the first start, and the tile packs you turned on are drawn too. It also draws agility obstacles, shortcuts and marks of grace, your destination, hovered and current tile and the path you walk, and other plugins can send it marks to draw.
 
 ## For plugin developers
 

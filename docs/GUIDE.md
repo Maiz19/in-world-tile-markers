@@ -9,8 +9,9 @@ Normal overlay lines are drawn on top of the game image, so Stretched Mode scale
 Hold Shift and right-click:
 
 - **a tile:** Mark or Unmark. A marked tile also has Label and Color (its own colour, or Reset).
+- **a tile, for a line:** Add line draws a line along one side of the tile, the side chosen under **Line markers**, in the **Line color** and **Line width** there. While Shift stays held, the mouse wheel turns the line you just added to its next side. Remove line takes away the line added last on that tile. **Extend line**, on a tile in line with the line you added or turned last, puts the same line on every tile between them, up to 64 tiles. Each line keeps the colour and width it was added with.
 - **an object:** Mark object or Unmark object. A marked object also has Mark border color, Mark fill color and Mark style (hull, outline, clickbox, tile).
-- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. Tag-All adds the name to the lists of the styles picked in **Tag styles** (at first true tile and south-west true tile; Ctrl + click picks more than one). Changing Tag styles later leaves the names you tagged as they are. A tagged NPC also has Tag color and Tag style for its name: Tag style adds the name to one style's list or takes it out.
+- **an NPC:** Tag-All or Un-tag-All, for every NPC with that name. Tag-All adds the name to the lists of the styles picked in **Tag styles** (at first true tile and south-west true tile; Ctrl + click picks more than one). Changing Tag styles later leaves the names you tagged as they are. A tagged NPC also has Tag color and Tag style for its name: Tag style adds the name to one style's list or takes it out. With **Draw NPCs in front of marks** on (under NPCs, off by default, as it costs frame rate), tagged NPCs are kept in front of the marks, as your own character is with **Player in front of marks**, so their own tile marks lie under them; every other NPC has In front or Not in front to be kept in front too without a tag. This costs frame rate, about a millisecond per such NPC on screen, so turn it on only for the few NPCs it matters for; at most the 8 nearest are kept in front. Their names are under **In front names**.
 
 With **Slayer task** on, the NPCs of your Slayer task are highlighted too, as the Slayer plugin finds them (it must be on), in the **Slayer task styles** and the **Slayer task color**.
 
@@ -18,11 +19,11 @@ The settings hold the colours and styles of marks without their own. Each NPC st
 
 ### Your marks from other plugins
 
-The first time HD World Markers starts in a RuneLite profile, it takes over your tiles from Ground Markers, your objects from Object Markers, and your NPC names from Better NPC Highlight when it is installed (on or off), else from NPC Indicators. Each name goes only into the lists of the styles it was drawn with there: from Better NPC Highlight the name list of each style it has on (never its ID lists), from NPC Indicators the styles it has on, or an NPC's own Tag style. It also takes over the options you changed in those plugins (for NPCs, in the one it took the names from), in Agility, and in Tile Indicators while it is on. Their settings are only read, never changed. Turn those plugins off afterwards, or everything is drawn twice: a chat message names every plugin that still draws the same marks (the option **Double drawing warning** turns it off).
+The first time HD World Markers starts in a RuneLite profile, it takes over your tiles from Ground Markers, your lines from Line Markers (those of its groups that show), your objects from Object Markers, and your NPC names from NPC Indicators and from Better NPC Highlight when it is installed (on or off). Each name goes only into the lists of the styles it was drawn with there: from Better NPC Highlight the name and ID lists of each style it has on (an ID becomes the NPC's name), from NPC Indicators the styles it has on, or an NPC's own Tag style. It also takes over the options you changed in those plugins (for NPC colours, from Better NPC Highlight when it is installed, else from NPC Indicators), in Agility, and in Tile Indicators while it is on. Their settings are only read, never changed. Turn those plugins off afterwards, or everything is drawn twice: a chat message names every plugin that still draws the same marks (the option **Double drawing warning** turns it off).
 
 NPC Indicators keeps colours and styles per NPC; here they are kept per name.
 
-**Sync** on the world map orb's right-click menu copies what you marked in them since. It only adds: a mark you removed here comes back if the other plugin still has it.
+While they stay installed, what you mark or unmark in them afterwards is marked or unmarked here at once (option **Follow other plugins**, on by default): a tile added in Ground Markers shows here right away, a tile removed there goes here too. **Sync** on the world map orb's right-click menu copies everything they have: marks missing here are added, and a mark here takes the colour, label or style it has there now. Sync never removes anything. Its chat message says what was copied and what each plugin holds.
 
 ### Sharing tiles
 
@@ -38,10 +39,10 @@ Agility course obstacles, shortcuts (those above your level in orange), Prifddin
 
 ## What it draws
 
-- **Your marks:** tiles with their labels, objects and tagged NPCs.
+- **Your marks:** tiles with their labels, lines along tile sides, objects and tagged NPCs.
 - **Agility:** obstacles, shortcuts and marks of grace.
 - **Tile indicators:** the destination, hovered and true tile, each with corners-only, fade-out and colour options.
-- **Paths:** the path you are walking, and the path to the hovered tile once you turn it on under **Hover path**, in the game world or on the minimap. Running tiles you only pass get their own colour. After a click beyond the loaded area (an HD renderer's extended view), the destination and a predicted path are shown too.
+- **Paths:** the path you are walking, and the path to the hovered tile once you turn it on under **Hover path**, in the game world or on the minimap. Running tiles you only pass get their own colour. After a click beyond the loaded area (an HD renderer's extended view), the destination and a predicted path are shown too: through the extended view's terrain, around its water, walls and objects as far as it is loaded, then straight on. The client itself has no collision data there, so that part stays a prediction.
 - **Marks other plugins send**, see below.
 
 ## Limits

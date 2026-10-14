@@ -202,8 +202,9 @@ public class HdWorldMarkersPlugin extends Plugin
             if (hdShadows && transparentShadows) { warnShadowTransparency(); }
             renderer.begin(camera, 1f / stretchScale(), xray, player.getWorldView().getPlane());
             hover = sources.hover();
-            // The player's silhouette is left uncovered by marks through walls.
-            renderer.cutAround(config.charactersInFrontOfTiles() ? player : null);
+            // The player's silhouette is left uncovered by marks through walls, and the In front NPCs' with the option.
+            renderer.cutAround(config.charactersInFrontOfTiles() ? player : null,
+                config.npcsInFrontOfTiles() ? sources.npcsInFront() : Collections.emptyList());
             for (Marker m : sceneMarkers) { renderer.tile(m); }
             // The hovered tile last: shapes of one tile are drawn in the order they are added, so it lies over the
             // tiles under it with its own opacity.
@@ -458,7 +459,7 @@ public class HdWorldMarkersPlugin extends Plugin
         // The settings are read every tick or frame: no rebuild (dragging a colour picker sent one per step), only
         // another try after a failure.
         failedUntil = 0;
-        if (key.startsWith(MarkerSources.TILES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
+        if (key.startsWith(MarkerSources.TILES) || key.startsWith(MarkerSources.LINES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
         else if (MarkerSources.npcKey(key)) { npcsChanged = true; }
     }
 

@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import net.runelite.api.*;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
 
@@ -15,6 +16,9 @@ import net.runelite.api.coords.WorldPoint;
  * the diagonals, until it stands on a tile from which the target can be used. Without one, it ends on the visited tile
  * within 10 tiles of the target that lies nearest to it, then takes fewest steps, under 100. Of a route the game keeps
  * the tiles where it turns, at most 25, and walks from turn to turn: diagonally where it can, else along x, else y.
+ *
+ * Beyond the loaded area the client has no collision flags. For a predicted walk there (findBeyond, stepBeyond) they
+ * are approximated from what a renderer's extended view shows: water and other blocked floor, walls, and objects.
  */
 class RouteFinder
 {
@@ -36,6 +40,22 @@ class RouteFinder
     private final List<WorldArea> blockers = new ArrayList<>();
     private int[][] flags;
     private int baseX, baseY, plane;
+    /**
+     * The extended scene as collision flags (ext[sceneX + extOffset][sceneY + extOffset]), approximated from its tiles;
+     * EXT_UNKNOWN where no tile is loaded; null without an extended scene. Made again when the scene, area or level
+     * changes, and every EXT_AGE loads (doors open and close).
+     */
+    private int[][] ext;
+    private int extOffset, extAge;
+    private Object extScene;
+    private int extBaseX, extBaseY, extPlane;
+    private static final int EXT_UNKNOWN = -2, EXT_AGE = 500;
+    /** The client walks nowhere within this many tiles of the loaded area's edge; beyond it, the extended view decides. */
+    private static final int BORDER = 6;
+    /** While set (findBeyond, stepBeyond), the border and everything beyond take the extended view's flags. */
+    private boolean borderless;
+    /** Whether an object of this id blocks walking; null: every object does. */
+    java.util.function.IntPredicate blocking;
 
     /** Takes the collision flags of the level you are on; false while there are none. */
     boolean load(WorldView wv)
@@ -46,7 +66,114 @@ class RouteFinder
         flags = maps[plane].getFlags();
         baseX = wv.getBaseX();
         baseY = wv.getBaseY();
+        extended(wv);
         return true;
+    }
+
+    /** Flags for the extended scene, as the client makes its own: floor, walls and objects (every object blocks here). */
+    private void extended(WorldView wv)
+    {
+        Scene scene = wv.getScene();
+        Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
+        if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane].length <= flags.length) { ext = null; extScene = null; return; }
+        boolean same = scene == extScene && baseX == extBaseX && baseY == extBaseY && plane == extPlane;
+        if (same && ++extAge < EXT_AGE) { return; }
+        extAge = 0; extScene = scene; extBaseX = baseX; extBaseY = baseY; extPlane = plane;
+        byte[][][] settings = scene.getExtendedTileSettings();
+        int size = tiles[plane].length;
+        extOffset = (size - flags.length) / 2;
+        if (ext == null || ext.length != size) { ext = new int[size][size]; }
+        for (int[] row : ext) { Arrays.fill(row, EXT_UNKNOWN); }
+        for (int x = 0; x < size; x++)
+        {
+            for (int y = 0; y < size; y++)
+            {
+                if (tiles[plane][x][y] == null) { continue; }
+                ext[x][y] = settings != null && plane < settings.length && (settings[plane][x][y] & 1) != 0 ? 0x200000 : 0;
+            }
+        }
+        Set<Object> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int x = 0; x < size; x++)
+        {
+            for (int y = 0; y < size; y++)
+            {
+                Tile t = tiles[plane][x][y];
+                if (t == null) { continue; }
+                WallObject w = t.getWallObject();
+                if (w != null && seen.add(w)) { wall(x, y, w.getConfig() & 0x1F, w.getConfig() >> 6 & 3); }
+                for (GameObject o : t.getGameObjects())
+                {
+                    if (o == null || !seen.add(o) || blocking != null && !blocking.test(o.getId())) { continue; }
+                    LocalPoint at = o.getLocalLocation();
+                    if (at == null) { continue; }
+                    int sw = Math.floorDiv(at.getX() - (o.sizeX() - 1) * 64, 128) + extOffset, sy = Math.floorDiv(at.getY() - (o.sizeY() - 1) * 64, 128) + extOffset;
+                    for (int i = 0; i < o.sizeX(); i++) { for (int j = 0; j < o.sizeY(); j++) { block(sw + i, sy + j, 0x100); } }
+                }
+            }
+        }
+    }
+
+    /** A wall as the client flags it: shape 0 a straight wall, 1 and 3 a corner, 2 two sides; rotation 0 west, 1 north, 2 east, 3 south. */
+    private void wall(int x, int y, int shape, int rotation)
+    {
+        // Per rotation the flag on the wall's tile and the one on the neighbour it faces, straight walls and corners.
+        int[] side = {0x80, 0x2, 0x8, 0x20}, facing = {0x8, 0x20, 0x80, 0x2}, dx = {-1, 0, 1, 0}, dy = {0, 1, 0, -1};
+        int[] corner = {0x1, 0x4, 0x10, 0x40}, cornerFacing = {0x10, 0x40, 0x1, 0x4}, cdx = {-1, 1, 1, -1}, cdy = {1, 1, -1, -1};
+        if (shape == 0 || shape == 2)
+        {
+            block(x, y, side[rotation]); block(x + dx[rotation], y + dy[rotation], facing[rotation]);
+        }
+        if (shape == 2)
+        {
+            int r = (rotation + 1) & 3;
+            block(x, y, side[r]); block(x + dx[r], y + dy[r], facing[r]);
+        }
+        if (shape == 1 || shape == 3)
+        {
+            block(x, y, corner[rotation]); block(x + cdx[rotation], y + cdy[rotation], cornerFacing[rotation]);
+        }
+    }
+
+    private void block(int x, int y, int bits)
+    {
+        if (x >= 0 && y >= 0 && x < ext.length && y < ext.length && ext[x][y] != EXT_UNKNOWN) { ext[x][y] |= bits; }
+    }
+
+    /** How far the extended view reaches beyond the loaded area, in tiles; 0 without one. */
+    int extent() { return ext == null ? 0 : extOffset; }
+
+    /** Whether the flags of this tile are known: in the loaded area, or shown by the extended view. */
+    boolean known(WorldPoint p)
+    {
+        int x = p.getX() - baseX, y = p.getY() - baseY;
+        if (x >= 0 && y >= 0 && x < flags.length && y < flags[x].length) { return true; }
+        int ex = x + extOffset, ey = y + extOffset;
+        return ext != null && ex >= 0 && ey >= 0 && ex < ext.length && ey < ext.length && ext[ex][ey] != EXT_UNKNOWN;
+    }
+
+    /** The point moved into the area the flags are known for: the loaded area and the extended view around it. */
+    WorldPoint clampKnown(WorldPoint p)
+    {
+        int reach = extent();
+        int x = Math.max(baseX - reach, Math.min(baseX + flags.length - 1 + reach, p.getX()));
+        int y = Math.max(baseY - reach, Math.min(baseY + flags.length - 1 + reach, p.getY()));
+        return new WorldPoint(x, y, p.getPlane());
+    }
+
+    /** As find, for a predicted walk: through the loaded area's border and on through the extended view. */
+    List<WorldPoint> findBeyond(WorldPoint from, Target target)
+    {
+        borderless = true;
+        try { return find(from, target); }
+        finally { borderless = false; }
+    }
+
+    /** As step, for a predicted walk: through the loaded area's border and on through the extended view. */
+    WorldPoint stepBeyond(WorldPoint at, WorldPoint to)
+    {
+        borderless = true;
+        try { return step(at, to); }
+        finally { borderless = false; }
     }
 
     /** The NPCs that block walking, where they stand now; the collision flags do not hold them. */
@@ -166,10 +293,20 @@ class RouteFinder
             && (dx == 0 || dy == 0 || (flag(x + dx, y) & STOP[3 * dx + 4]) == 0 && (flag(x, y + dy) & STOP[dy + 4]) == 0);
     }
 
-    /** The flags of a scene tile; beyond the loaded area every tile is blocked. */
+    /**
+     * The flags of a scene tile; beyond the loaded area the extended view's where known, else every tile is blocked.
+     * For a predicted walk (borderless) the loaded area's border takes the extended view's flags too.
+     */
     private int flag(int x, int y)
     {
-        return x >= 0 && y >= 0 && x < flags.length && y < flags[x].length ? flags[x][y] : -1;
+        boolean inner = x >= 0 && y >= 0 && x < flags.length && y < flags[x].length;
+        if (inner && !(borderless && ext != null && (x < BORDER || y < BORDER || x >= flags.length - BORDER || y >= flags[x].length - BORDER)))
+        { return flags[x][y]; }
+        if (ext == null || !borderless && !inner) { return inner ? flags[x][y] : -1; }
+        int ex = x + extOffset, ey = y + extOffset;
+        if (ex < 0 || ey < 0 || ex >= ext.length || ey >= ext.length) { return -1; }
+        int f = ext[ex][ey];
+        return f == EXT_UNKNOWN ? -1 : f;
     }
 
     /** Lines "id=value", maybe followed by " // a comment"; empty when the bundled list cannot be read. */

@@ -16,8 +16,12 @@ final class PlayerCut
 {
     /** The box: left, top, right, bottom. */
     final float minX, minY, maxX, maxY;
-    /** Trapezoids {x0, y0, x1, y1, x2, y2, x3, y3} (convex, clockwise on the canvas), and their bounds {minX, maxX}. */
+    /**
+     * Trapezoids {x0, y0, x1, y1, x2, y2, x3, y3} (convex, clockwise on the canvas), and their bounds {minX, maxX}, by
+     * their top (y0) ascending; reach[i] is the lowest bottom (y2) of pieces 0..i, so a face's rows are found by search.
+     */
     final List<float[]> pieces = new ArrayList<>();
+    float[] reach;
 
     private PlayerCut(float minX, float minY, float maxX, float maxY)
     {
@@ -107,7 +111,19 @@ final class PlayerCut
             Map<Long, float[]> swap = open; open = next; next = swap;
         }
         for (float[] t : open.values()) { cut.add(e, t); }
+        cut.pieces.sort((p, q) -> Float.compare(p[1], q[1]));
+        cut.reach = new float[cut.pieces.size()];
+        float low = -Float.MAX_VALUE;
+        for (int i = 0; i < cut.reach.length; i++) { low = Math.max(low, cut.pieces.get(i)[5]); cut.reach[i] = low; }
         return cut;
+    }
+
+    /** The first piece that may reach below y: the pieces before it end above it. */
+    int firstBelow(float y)
+    {
+        int lo = 0, hi = reach.length;
+        while (lo < hi) { int mid = (lo + hi) >>> 1; if (reach[mid] > y) { hi = mid; } else { lo = mid + 1; } }
+        return lo;
     }
 
     private void add(float[] e, float[] t)

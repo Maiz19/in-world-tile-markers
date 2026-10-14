@@ -117,6 +117,8 @@ final class PathTracker extends Overlay implements KeyListener
 
     void startUp()
     {
+        // Beyond the loaded area an object blocks walking when it is a thing with a name (the client's own flag is not known there).
+        routes.blocking = id -> { ObjectComposition d = client.getObjectDefinition(id); return d != null && d.getName() != null && !"null".equals(d.getName()); };
         activePath.clear(); hoverPath.clear(); predictedPath.clear();
         click = null;
         ctrl = keyActive = keyHover = pressed = false;
@@ -324,8 +326,9 @@ final class PathTracker extends Overlay implements KeyListener
 
     /**
      * Fills a path's tiles: from `from` through its turns, a step at a time as the game moves you, up to a blocked step;
-     * blind (beyond the loaded area nothing is known) every step is taken, up to MAX_PREDICTED tiles. Running, every
-     * other tile is only run past; the last tile is always stood on.
+     * blind (a predicted walk beyond the loaded area) through the border and the extended view where it is known, and
+     * straight on where nothing is known or a step is blocked, up to MAX_PREDICTED tiles. Running, every other tile is
+     * only run past; the last tile is always stood on.
      */
     void walk(Path p, WorldPoint from, boolean blind)
     {
@@ -338,8 +341,13 @@ final class PathTracker extends Overlay implements KeyListener
         {
             while ((at.getX() != turn.getX() || at.getY() != turn.getY()) && (!blind || p.main.size() + p.passed.size() < MAX_PREDICTED))
             {
-                at = blind ? at.dx(Integer.signum(turn.getX() - at.getX())).dy(Integer.signum(turn.getY() - at.getY())) : routes.step(at, turn);
-                if (at == null) { return; }
+                WorldPoint next = blind ? routes.known(at) ? routes.stepBeyond(at, turn) : null : routes.step(at, turn);
+                if (next == null)
+                {
+                    if (!blind) { return; }
+                    next = at.dx(Integer.signum(turn.getX() - at.getX())).dy(Integer.signum(turn.getY() - at.getY()));
+                }
+                at = next;
                 (pass && !at.equals(end) ? p.passed : p.main).add(at);
                 pass = p.running && !pass;
             }
@@ -518,8 +526,9 @@ final class PathTracker extends Overlay implements KeyListener
     }
 
     /**
-     * The predicted path to a walk target: the route to the scene tile nearest it, then straight on, since beyond the
-     * loaded area nothing is known. Found again only when the target, your tile or running changes.
+     * The predicted path to a walk target: the route to the known tile nearest it, through the loaded area's border and
+     * on through a renderer's extended view where it is loaded (around water, walls and objects), then straight on,
+     * since beyond that nothing is known. Found again only when the target, your tile or running changes.
      */
     private void predict(Player me, WorldPoint guess)
     {
@@ -533,9 +542,7 @@ final class PathTracker extends Overlay implements KeyListener
         // This runs while every mark is collected: a failure leaves only the straight line.
         try
         {
-            List<WorldPoint> route = routes.load(wv) ? routes.find(from, Target.tile(new WorldPoint(
-                Math.max(wv.getBaseX(), Math.min(wv.getBaseX() + wv.getSizeX() - 1, guess.getX())),
-                Math.max(wv.getBaseY(), Math.min(wv.getBaseY() + wv.getSizeY() - 1, guess.getY())), guess.getPlane()))) : null;
+            List<WorldPoint> route = routes.load(wv) ? routes.findBeyond(from, Target.tile(routes.clampKnown(guess))) : null;
             if (route != null) { turns.addAll(route); }
         }
         catch (RuntimeException ex)
