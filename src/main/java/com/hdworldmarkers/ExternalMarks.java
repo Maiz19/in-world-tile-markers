@@ -36,8 +36,8 @@ import net.runelite.client.events.ProfileChanged;
  * WorldPoint, or maps with {@code x}, {@code y}, {@code plane}), {@code color} and {@code width} (border pixels, default
  * 2). A line on the ground through the tiles' centres, as a path: points next to each other (diagonals too) are
  * joined, a jump between others (a teleport) breaks it there. In an instance a point found in several places is left
- * out. Optional {@code arrows} (a number n): a small filled arrowhead on the ground every n tiles, pointing the way the
- * points go.
+ * out. Optional {@code arrows} (a number n): a small filled arrowhead on the ground every n tiles counted from the line's
+ * end (so they stay put while the sender trims the start as the player walks), pointing the way the points go.
  * Replaces all lines of that owner; at most {@value #MAX_PER_OWNER} points in all.</li>
  * <li>{@code clear}: {@code owner}. Removes everything of that owner.</li>
  * </ul>
@@ -303,7 +303,8 @@ final class ExternalMarks
                 m.path = path;
                 m.layer = Marker.EXTERNAL;
                 out.add(m);
-                if (arrows > 0 && next != null && i % arrows == arrows / 2)
+                // Counted from the line's far end, which stays as the sender trims the near end: the arrows stay put.
+                if (arrows > 0 && next != null && (at.size() - 1 - i) % arrows == arrows / 2)
                 {
                     Marker arrow = new Marker("ext:" + owner + ":arrow:" + n, local, p.getPlane(), 1, 1, color, color, 1, null);
                     arrow.area = arrow(next.getX() - p.getX(), next.getY() - p.getY());
