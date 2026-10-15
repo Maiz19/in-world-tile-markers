@@ -54,7 +54,7 @@ Agility course obstacles, shortcuts (those above your level in orange), Prifddin
 
 ## For plugin developers
 
-Other plugins can have HD World Markers draw their tiles, timer pies and NPC highlights without depending on it: post a `PluginMessage` with namespace `hd-world-markers`. Without HD World Markers installed, nothing happens.
+Other plugins can have HD World Markers draw their tiles, lines, timer pies and NPC highlights without depending on it: post a `PluginMessage` with namespace `hd-world-markers`. Without HD World Markers installed, nothing happens.
 
 ```java
 Map<String, Object> tile = new HashMap<>();
@@ -76,6 +76,7 @@ eventBus.post(new PluginMessage("hd-world-markers", "tiles", data));
 | `tiles` | `owner`, `tiles` (list of maps as above) | Replaces all tiles of `owner`. |
 | `npcs` | `owner`, `npcs`: maps with `npc` (the NPC) or `index`, `style` (`hull`, `outline`, `clickbox`, `tile` or `truetile`), `color`, optional `fill` and `width` | Replaces all NPC marks of `owner`. |
 | `pies` | `owner`, `pies`: maps with `point` (or `x`, `y`, `plane`), `color` (the filled part), optional `border` (its ring) and `width`, `progress` (0 to 1) or `start` and `end` (`System.currentTimeMillis()` times; it fills from start to end by itself), `size` (diameter in local units, 128 is a tile; default 64) and `height` (local units above the ground) | Replaces all pies of `owner`. A pie fills clockwise from the top, as RuneLite's progress pies, and grows and shrinks with the world as you zoom. |
+| `lines` | `owner`, `lines`: maps with `points` (a list of `WorldPoint`s, or maps with `x`, `y`, `plane`), `color`, optional `width` (pixels, default 2) and optional `arrows` (a number n: an arrowhead every n tiles, pointing the way the points go) | Replaces all lines of `owner`. A line runs on the ground through the tiles' centres, as a route: points next to each other (diagonals too, same plane) are joined; any other jump, such as a teleport, breaks the line there. Only the floor you are on is drawn. In an instance a point found in several places is left out. At most 1,000 points per owner in all. |
 | `clear` | `owner` | Removes everything of `owner`. |
 
-Marks stay until their owner replaces or clears them, at most 1,000 per owner. They are also cleared on logout, world hop, connection loss, profile change and when HD World Markers stops. Send `clear` in your plugin's `shutDown`, and send your marks again after logging in.
+Marks stay until their owner replaces or clears them, at most 1,000 per owner (for lines: points). They are also cleared on logout, world hop, connection loss, profile change and when HD World Markers stops. Send `clear` in your plugin's `shutDown`, and send your marks again after logging in.

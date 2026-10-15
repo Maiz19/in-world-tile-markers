@@ -299,6 +299,8 @@ final class SceneShapeRenderer
         int height = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
         if (m.dot || m.offX != null) { return facing(m, at, level, height); }
         if (m.edge >= 0) { return line(m, at, level, height); }
+        if (m.path != null) { return path(m, at, level, height); }
+        if (m.area != null) { return area(m, at, level, height); }
         int w = m.width, h = m.height, n = 2 * (w + h);
         ensure(n);
         int x0 = at.getX() - w * 64, y0 = at.getY() - h * 64, k = 0;
@@ -344,6 +346,38 @@ final class SceneShapeRenderer
         }
         if (beside(2, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
         return shape(m, at, level, outline.buildStrip(px, py, pd, 2, width(m.borderWidth)), Marker.NO_FILL);
+    }
+
+    /** A line through the tile (Marker.path), as wide as its border: a strip through its points on the ground. */
+    private boolean path(Marker m, LocalPoint at, int level, int height)
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        int n = m.path.length / 2, k = 0;
+        ensure(n);
+        for (int i = 0; i < n; i++) { k = sample(wv, level, at.getX() + m.path[2 * i], at.getY() + m.path[2 * i + 1], k); }
+        if (k < 0)
+        {
+            camera.project(at.getX(), at.getY(), height, point);
+            return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
+        }
+        if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
+        return shape(m, at, level, outline.buildPath(px, py, pd, n, width(m.borderWidth)), Marker.NO_FILL);
+    }
+
+    /** A filled shape on the ground (Marker.area), built as a tile's footprint is: its corners at the ground's height. */
+    private boolean area(Marker m, LocalPoint at, int level, int height)
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        int n = m.area.length / 2, k = 0;
+        ensure(n);
+        for (int i = 0; i < n; i++) { k = sample(wv, level, at.getX() + m.area[2 * i], at.getY() + m.area[2 * i + 1], k); }
+        if (k < 0)
+        {
+            camera.project(at.getX(), at.getY(), height, point);
+            return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
+        }
+        if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
+        return shape(m, at, level, around(at, height, n, m.borderWidth), m.fill);
     }
 
     /**

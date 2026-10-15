@@ -2,6 +2,7 @@
 
 ## 1.2.0
 
+- Other plugins can send routes as lines (`lines`, optional arrows): a line on the ground through the tiles' centres, broken where the route jumps, such as at a teleport. See the guide, For plugin developers.
 - Clicking an object no longer sends the active path onto the object for a moment: the flag the client puts on what you click is ignored until the game's own flag says where you walk.
 - Sides objects cannot be used from: the list is made from the game cache, with the objects of the last years (Varlamore and on) that it lacked, and the ones the game changed since.
 

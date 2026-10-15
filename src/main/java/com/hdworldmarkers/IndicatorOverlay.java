@@ -71,7 +71,7 @@ final class IndicatorOverlay extends Overlay
             {
                 if (!(scene && plugin.drawn(m.key)))
                 {
-                    Shape shape = m.dot || m.offX != null ? facing(m) : m.edge >= 0 ? line(m) : polygon(m);
+                    Shape shape = m.dot || m.offX != null ? facing(m) : m.edge >= 0 ? line(m) : m.path != null ? path(m) : m.area != null ? area(m) : polygon(m);
                     if (shape != null) { draw(g, shape, m); }
                 }
                 if (m.label != null && !m.label.isEmpty())
@@ -159,6 +159,34 @@ final class IndicatorOverlay extends Overlay
         Point a = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(x0 + side[0], y0 + side[1], wv), m.plane);
         Point b = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(x0 + side[2], y0 + side[3], wv), m.plane);
         return a == null || b == null ? null : new java.awt.geom.Line2D.Float(a.getX(), a.getY(), b.getX(), b.getY());
+    }
+
+    /** A line through the tile (Marker.path), through its points on the canvas but the first and last, or null. */
+    private Shape path(Marker m)
+    {
+        java.awt.geom.Path2D.Float path = new java.awt.geom.Path2D.Float();
+        for (int i = 1; i < m.path.length / 2 - 1; i++)
+        {
+            Point p = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(m.point.getX() + m.path[2 * i],
+                m.point.getY() + m.path[2 * i + 1], m.point.getWorldView()), m.plane);
+            if (p == null) { return null; }
+            if (i == 1) { path.moveTo(p.getX(), p.getY()); } else { path.lineTo(p.getX(), p.getY()); }
+        }
+        return path;
+    }
+
+    /** A filled shape on the ground (Marker.area) on the canvas, or null. */
+    private Polygon area(Marker m)
+    {
+        Polygon polygon = new Polygon();
+        for (int i = 0; i < m.area.length / 2; i++)
+        {
+            Point p = Perspective.localToCanvas(client, new net.runelite.api.coords.LocalPoint(m.point.getX() + m.area[2 * i],
+                m.point.getY() + m.area[2 * i + 1], m.point.getWorldView()), m.plane);
+            if (p == null) { return null; }
+            polygon.addPoint(p.getX(), p.getY());
+        }
+        return polygon;
     }
 
     /** The footprint's corners on the canvas, or null. */

@@ -32,6 +32,13 @@ import net.runelite.client.events.ProfileChanged;
  * filled part), optional {@code border} (its ring) and {@code width}, {@code progress} (0 to 1) or {@code start} and
  * {@code end} (System.currentTimeMillis times: filled from start to end), {@code size} (diameter in local units, 128
  * a tile; default 64) and {@code height} (local units above the ground). Replaces all pies of that owner.</li>
+ * <li>{@code lines}: {@code owner} and {@code lines}, a list of maps with {@code points} (a list of points as tiles:
+ * WorldPoint, or maps with {@code x}, {@code y}, {@code plane}), {@code color} and {@code width} (border pixels, default
+ * 2). A line on the ground through the tiles' centres, as a path: points next to each other (diagonals too) are
+ * joined, a jump between others (a teleport) breaks it there. In an instance a point found in several places is left
+ * out. Optional {@code arrows} (a number n): a small filled arrowhead on the ground every n tiles, pointing the way the
+ * points go.
+ * Replaces all lines of that owner; at most {@value #MAX_PER_OWNER} points in all.</li>
  * <li>{@code clear}: {@code owner}. Removes everything of that owner.</li>
  * </ul>
  * Marks stay until their owner replaces or clears them.
@@ -45,13 +52,14 @@ final class ExternalMarks
 
     private final Client client;
     private final Map<String, List<Map<String, Object>>> tiles = new ConcurrentHashMap<>(), npcs = new ConcurrentHashMap<>(),
-        pies = new ConcurrentHashMap<>();
+        pies = new ConcurrentHashMap<>(), lines = new ConcurrentHashMap<>();
     /**
      * Each owner's tiles and pies as markers for the scene they were made for, made again after new marks or a scene load:
      * every tick they were made anew (an instance's tiles searched its template chunks for each). Pies that fill by the
      * clock are made every tick.
      */
-    private final Map<String, Made> tileMarkers = new ConcurrentHashMap<>(), pieMarkers = new ConcurrentHashMap<>();
+    private final Map<String, Made> tileMarkers = new ConcurrentHashMap<>(), pieMarkers = new ConcurrentHashMap<>(),
+        lineMarkers = new ConcurrentHashMap<>();
 
     /**
      * Markers with the list and floor they were made for: kept while those are the owner's list and your floor. A list
@@ -72,7 +80,7 @@ final class ExternalMarks
     @Inject
     ExternalMarks(Client client) { this.client = client; }
 
-    void clear() { tiles.clear(); npcs.clear(); pies.clear(); tileMarkers.clear(); pieMarkers.clear(); }
+    void clear() { tiles.clear(); npcs.clear(); pies.clear(); lines.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
 
     @Subscribe
     public void onProfileChanged(ProfileChanged event) { clear(); }
@@ -86,7 +94,7 @@ final class ExternalMarks
             clear();
         }
         // Another scene: the tiles are placed in it anew.
-        else if (state == GameState.LOADING) { tileMarkers.clear(); pieMarkers.clear(); }
+        else if (state == GameState.LOADING) { tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
     }
 
     @Subscribe
@@ -100,7 +108,11 @@ final class ExternalMarks
             case "tiles": tiles.put((String) owner, entries(message.getData().get("tiles"))); tileMarkers.remove(owner); break;
             case "npcs": npcs.put((String) owner, entries(message.getData().get("npcs"))); break;
             case "pies": pies.put((String) owner, entries(message.getData().get("pies"))); pieMarkers.remove(owner); break;
-            case "clear": tiles.remove(owner); npcs.remove(owner); pies.remove(owner); tileMarkers.remove(owner); pieMarkers.remove(owner); break;
+            case "lines": lines.put((String) owner, lines(message.getData().get("lines"))); lineMarkers.remove(owner); break;
+            case "clear":
+                tiles.remove(owner); npcs.remove(owner); pies.remove(owner); lines.remove(owner);
+                tileMarkers.remove(owner); pieMarkers.remove(owner); lineMarkers.remove(owner);
+                break;
             default: break;
         }
     }
@@ -119,6 +131,24 @@ final class ExternalMarks
         return Collections.unmodifiableList(result);
     }
 
+    /** The owner's lines as an immutable copy, each with its points copied too: at most MAX_PER_OWNER points in all. */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> lines(Object value)
+    {
+        List<Map<String, Object>> result = new ArrayList<>();
+        int left = MAX_PER_OWNER;
+        for (Map<String, Object> line : entries(value))
+        {
+            if (!(line.get("points") instanceof Collection) || left <= 0) { continue; }
+            List<Object> points = new ArrayList<>();
+            for (Object p : (Collection<Object>) line.get("points")) { if (left-- > 0) { points.add(p instanceof Map ? new HashMap<>((Map<String, Object>) p) : p); } }
+            Map<String, Object> copy = new HashMap<>(line);
+            copy.put("points", Collections.unmodifiableList(points));
+            result.add(Collections.unmodifiableMap(copy));
+        }
+        return Collections.unmodifiableList(result);
+    }
+
     void collect(List<Marker> markerOut, List<ModelTarget> modelOut)
     {
         WorldView wv = client.getTopLevelWorldView();
@@ -132,6 +162,17 @@ final class ExternalMarks
             {
                 made = new Made(list, plane, tileMarkers(wv, owner.getKey(), list));
                 tileMarkers.put(owner.getKey(), made);
+            }
+            onFloor(made.markers, plane, markerOut);
+        }
+        for (Map.Entry<String, List<Map<String, Object>>> owner : lines.entrySet())
+        {
+            List<Map<String, Object>> list = owner.getValue();
+            Made made = lineMarkers.get(owner.getKey());
+            if (made == null || !made.of(list, plane))
+            {
+                made = new Made(list, plane, lineMarkers(wv, owner.getKey(), list));
+                lineMarkers.put(owner.getKey(), made);
             }
             onFloor(made.markers, plane, markerOut);
         }
@@ -211,6 +252,85 @@ final class ExternalMarks
             }
         }
         return out;
+    }
+
+    /**
+     * An owner's lines as one marker per tile (Marker.path): from halfway to the tile before, through its centre, to
+     * halfway to the next, each end aimed at that tile's centre, so the pieces meet without a gap and each tile is
+     * culled on its own. Only neighbours on one floor are joined; a tile with neither is left out.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Marker> lineMarkers(WorldView wv, String owner, List<Map<String, Object>> entries)
+    {
+        List<Marker> out = new ArrayList<>();
+        int n = 0;
+        for (Map<String, Object> line : entries)
+        {
+            Color color = color(line.get("color"), null);
+            if (color == null) { continue; }
+            int width = number(line.get("width"), 2), arrows = Math.max(0, number(line.get("arrows"), 0));
+            // Where each point is in this world view: one place, or null (none or several) to break the line there.
+            List<WorldPoint> at = new ArrayList<>();
+            for (Object p : (List<Object>) line.get("points"))
+            {
+                WorldPoint point = p instanceof WorldPoint ? (WorldPoint) p : p instanceof Map ? point((Map<String, Object>) p) : null;
+                Collection<WorldPoint> places = point == null ? Collections.emptyList() : places(wv, point);
+                WorldPoint place = places.size() == 1 ? places.iterator().next() : null;
+                if (place == null || at.isEmpty() || !place.equals(at.get(at.size() - 1))) { at.add(place); }
+            }
+            for (int i = 0; i < at.size(); i++)
+            {
+                WorldPoint p = at.get(i), prev = i > 0 && joined(at.get(i - 1), p) ? at.get(i - 1) : null,
+                    next = i + 1 < at.size() && joined(p, at.get(i + 1)) ? at.get(i + 1) : null;
+                LocalPoint local = p == null || prev == null && next == null ? null : LocalPoint.fromWorld(wv, p);
+                if (local == null) { continue; }
+                int[] path = new int[2 * (2 + (prev != null ? 1 : 0) + 1 + (next != null ? 1 : 0))];
+                int k = 0;
+                // Without a tile before it starts at the centre: its aim the centre itself, for a square end.
+                if (prev != null)
+                {
+                    int dx = prev.getX() - p.getX(), dy = prev.getY() - p.getY();
+                    path[k++] = dx * 128; path[k++] = dy * 128; path[k++] = dx * 64; path[k++] = dy * 64;
+                }
+                else { k += 2; }
+                k += 2;
+                if (next != null)
+                {
+                    int dx = next.getX() - p.getX(), dy = next.getY() - p.getY();
+                    path[k++] = dx * 64; path[k++] = dy * 64; path[k++] = dx * 128; path[k] = dy * 128;
+                }
+                Marker m = new Marker("ext:" + owner + ":line:" + n++, local, p.getPlane(), 1, 1, color, null, width, null);
+                m.path = path;
+                m.layer = Marker.EXTERNAL;
+                out.add(m);
+                if (arrows > 0 && next != null && i % arrows == arrows / 2)
+                {
+                    Marker arrow = new Marker("ext:" + owner + ":arrow:" + n, local, p.getPlane(), 1, 1, color, color, 1, null);
+                    arrow.area = arrow(next.getX() - p.getX(), next.getY() - p.getY());
+                    arrow.layer = Marker.EXTERNAL;
+                    out.add(arrow);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** An arrowhead's size in local units (128 a tile): its tip ahead of the centre, its back behind, half its width. */
+    private static final int TIP = 26, BACK = 22, HALF = 20;
+
+    /** A filled arrowhead around the tile's centre pointing (dx, dy) (a step to a neighbour): tip, back left, back right. */
+    static int[] arrow(int dx, int dy)
+    {
+        double length = Math.hypot(dx, dy), ux = dx / length, uy = dy / length;
+        return new int[]{(int) Math.round(ux * TIP), (int) Math.round(uy * TIP),
+            (int) Math.round(-ux * BACK - uy * HALF), (int) Math.round(-uy * BACK + ux * HALF),
+            (int) Math.round(-ux * BACK + uy * HALF), (int) Math.round(-uy * BACK - ux * HALF)};
+    }
+
+    /** Whether a line joins these points: next to each other (diagonals too) on one floor. */
+    private static boolean joined(WorldPoint a, WorldPoint b)
+    {
+        return a != null && b != null && a.getPlane() == b.getPlane() && Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getY() - b.getY())) == 1;
     }
 
     /** Points around a circle, clockwise from the top. */

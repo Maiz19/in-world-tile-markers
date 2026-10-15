@@ -53,6 +53,13 @@ final class Marker
      * HdWorldMarkersConfig.Edge (west, east, south, north); -1 for no line.
      */
     int edge = -1;
+    /**
+     * A line through the tile instead of the footprint, in the border's width and colour (another plugin's route): its
+     * points in local units from point, x then y. The first and last only aim its ends.
+     */
+    int[] path;
+    /** A filled shape on the ground instead of the footprint (an arrowhead): its corners in local units from point, x then y. */
+    int[] area;
 
     Marker(String key, LocalPoint point, int plane, int width, int height, Color color, Color fill,
         double borderWidth, String label)

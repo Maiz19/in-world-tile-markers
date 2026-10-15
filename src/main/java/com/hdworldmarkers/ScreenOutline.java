@@ -154,6 +154,27 @@ final class ScreenOutline
         return true;
     }
 
+    /**
+     * As buildStrip through points 1 to n - 2: the first and last only aim its ends, which are mitred towards them like
+     * inner points. Strips that share an end and the points either side of it meet without a gap. Vertices: outer
+     * 0..m-1, inner m..2m-1, for m = n - 2.
+     */
+    boolean buildPath(float[] px, float[] py, float[] pd, int n, float width)
+    {
+        if (n < 4 || !(width > 0)) { return false; }
+        ring(px, py, pd, n, width, false, false);
+        int m = n - 2, f = 0;
+        System.arraycopy(x, 1, x, 0, m); System.arraycopy(y, 1, y, 0, m); System.arraycopy(depth, 1, depth, 0, m);
+        System.arraycopy(x, n + 1, x, m, m); System.arraycopy(y, n + 1, y, m, m); System.arraycopy(depth, n + 1, depth, m, m);
+        minX = minY = Float.MAX_VALUE;
+        maxX = maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < 2 * m; i++) { minX = Math.min(minX, x[i]); maxX = Math.max(maxX, x[i]); minY = Math.min(minY, y[i]); maxY = Math.max(maxY, y[i]); }
+        for (int i = 0; i < m - 1; i++) { f = face(f, i, i + 1, m + i + 1); f = face(f, i, m + i + 1, m + i); }
+        vertices = 2 * m;
+        faces = borderFaces = f;
+        return true;
+    }
+
     private int face(int f, int v1, int v2, int v3)
     {
         // The client draws a face when (a - b) x (c - b) > 0 in canvas space.
