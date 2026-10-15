@@ -264,6 +264,41 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcSlayerTaskColor", name = "Slayer task color", description = "Border color of your Slayer task's NPCs, unless their name has a Tag color", position = 7, section = npcSection)
     default Color npcSlayerTaskColor() { return new Color(224, 60, 49); }
 
+    @ConfigItem(keyName = "npcSouthWestCorner", name = "South west as corner", description = "Draws the south west tile and south west true tile as a corner instead: the south west half of the tile, in Corner color and Corner fill", position = 10, section = npcSection)
+    default boolean npcSouthWestCorner() { return false; }
+
+    @Alpha
+    @ConfigItem(keyName = "npcCornerColor", name = "Corner color", description = "Border color of the south west corner, with South west as corner on", position = 11, section = npcSection)
+    default Color npcCornerColor() { return new Color(189, 189, 189); }
+
+    @Alpha
+    @ConfigItem(keyName = "npcCornerFill", name = "Corner fill", description = "Fill color of the south west corner, with South west as corner on", position = 12, section = npcSection)
+    default Color npcCornerFill() { return new Color(189, 189, 189, 100); }
+
+    /** How much of the south-west tile the corner covers; its two sides along the tile's edges in local units (128 a tile). */
+    enum CornerSize
+    {
+        HALF("Half", 128), QUARTER("Quarter", 91);
+
+        final String label;
+        /** Its middle from the tile's centre (the fill fans out from it, so it must lie inside), and its corners from there. */
+        final int offset;
+        final int[] area;
+
+        CornerSize(String label, int side)
+        {
+            this.label = label;
+            int c = side / 3;
+            offset = c - 64;
+            area = new int[]{-c, -c, side - c, -c, -c, side - c};
+        }
+
+        @Override public String toString() { return label; }
+    }
+
+    @ConfigItem(keyName = "npcCornerSize", name = "Corner size", description = "How much of the south west tile the corner covers: half or a quarter", position = 13, section = npcSection)
+    default CornerSize npcCornerSize() { return CornerSize.HALF; }
+
     // Destination tile
 
     @ConfigItem(keyName = "highlightDestinationTile", name = "Highlight destination tile", description = "Highlights tile player is walking to", position = 0, section = destinationSection)

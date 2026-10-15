@@ -36,6 +36,7 @@ package com.hdworldmarkers;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.hdworldmarkers.HdWorldMarkersConfig.CornerSize;
 import com.hdworldmarkers.HdWorldMarkersConfig.NpcStyle;
 import java.awt.Color;
 import java.util.*;
@@ -502,13 +503,11 @@ final class MarkerSources
             }
             if ((styles & SW_TILE) != 0 && local != null)
             {
-                result.add(npcMarker(Marker.NPC_TILE + 2, key + ":sw", local.plus(-offset, -offset), npcPlane, 1, or(own, look.swTile),
-                    look.swTileFill, look.width));
+                result.add(swMarker(Marker.NPC_TILE + 2, key + ":sw", local.plus(-offset, -offset), npcPlane, own, look.swTile, look.swTileFill, look));
             }
             if ((styles & SW_TRUE_TILE) != 0 && trueSw != null)
             {
-                result.add(npcMarker(Marker.NPC_TILE + 3, key + ":swtrue", trueSw, npcPlane, 1, or(own, look.swTrueTile), look.swTrueTileFill,
-                    look.width));
+                result.add(swMarker(Marker.NPC_TILE + 3, key + ":swtrue", trueSw, npcPlane, own, look.swTrueTile, look.swTrueTileFill, look));
             }
         }
         // Marked objects' tile style: the stroke is capped at 2, as in Object Markers.
@@ -717,6 +716,16 @@ final class MarkerSources
     private static Marker npcMarker(int layer, String key, LocalPoint point, int plane, int size, Color color, Color fill, double width)
     { return layer(layer, new Marker(key, point, plane, size, size, color, fill, width, null)); }
 
+    /** A south-west tile style: the tile, or with South west as corner its south-west half in the corner's own colors. */
+    private static Marker swMarker(int layer, String key, LocalPoint point, int plane, Color own, Color color, Color fill, NpcLook look)
+    {
+        if (!look.swCorner) { return npcMarker(layer, key, point, plane, 1, or(own, color), fill, look.width); }
+        CornerSize size = look.cornerSize;
+        Marker m = npcMarker(layer, key + ":corner", point.plus(size.offset, size.offset), plane, 1, or(own, look.corner), look.cornerFill, look.width);
+        m.area = size.area;
+        return m;
+    }
+
     /** The tag of this NPC's name, or null. */
     private NpcTag tag(NPC npc) { return npcTags.isEmpty() || npc.getName() == null ? null : npcTags.get(Text.standardize(npc.getName())); }
 
@@ -727,6 +736,9 @@ final class MarkerSources
     private final class NpcLook
     {
         final double width = config.npcBorderWidth();
+        final boolean swCorner = config.npcSouthWestCorner();
+        final Color corner = config.npcCornerColor(), cornerFill = config.npcCornerFill();
+        final CornerSize cornerSize = config.npcCornerSize() == null ? CornerSize.HALF : config.npcCornerSize();
         final int taskStyles = bits(config.npcSlayerTaskStyles());
         final Color task = config.npcSlayerTaskColor();
         final boolean ignoreDead = config.npcIgnoreDead(), ignorePets = config.npcIgnorePets();
