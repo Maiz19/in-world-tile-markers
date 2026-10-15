@@ -11,9 +11,10 @@ import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
 
 /**
- * Routes and steps as the game takes them, on the collision flags of your level. A route is the client's
- * breadth-first search from your tile, at most 64 tiles each way, trying the steps west, east, south, north and then
- * the diagonals, until it stands on a tile from which the target can be used. Without one, it ends on the visited tile
+ * Routes and steps as the game takes them, on the collision flags of your level. The server finds the route (the
+ * client only shows its flag): a breadth-first search from your tile, at most 64 tiles each way, trying the steps west,
+ * east, south, north and then the diagonals, until it stands on a tile from which the target can be used: of two sides
+ * as many steps away, the one that order finds first. Without one, it ends on the visited tile
  * within 10 tiles of the target that lies nearest to it, then takes fewest steps, under 100. Of a route the game keeps
  * the tiles where it turns, at most 25, and walks from turn to turn: diagonally where it can, else along x, else y.
  *
@@ -32,8 +33,9 @@ class RouteFinder
     /** The search window, centred on your tile, as cells x * SIZE + y. */
     private static final int SIZE = 128, CENTRE = 64 * SIZE + 64;
     /**
-     * Path Marker's lists (see THIRD_PARTY_NOTICES.md), which the client's API does not offer: per object the sides it
-     * cannot be used from (bits north 1, east 2, south 4, west 8, unrotated), and the NPCs that block walking.
+     * Lists the client's API does not offer (see THIRD_PARTY_NOTICES.md): per object the sides it cannot be used from
+     * (bits north 1, east 2, south 4, west 8, unrotated; made from the game cache), and the NPCs that block walking
+     * (Path Marker's).
      */
     private static final Map<Integer, Integer> BLOCKED_SIDES = read("loc_blocking.txt"), BLOCKING_NPCS = read("npc_blocking.txt");
     private final int[] steps = new int[SIZE * SIZE], via = new int[SIZE * SIZE], queue = new int[SIZE * SIZE];
@@ -239,8 +241,10 @@ class RouteFinder
     private int tail;
 
     /**
-     * The client's breadth-first search from the window's centre, at most `most` steps: the cell from which t can be
-     * used (-1: none, or no t); the cells visited are queue[0, tail).
+     * The game's breadth-first search from the window's centre, at most `most` steps: the cell from which t can be
+     * used (-1: none, or no t); the cells visited are queue[0, tail). Of two cells as many steps away, the first the
+     * search order finds: Sunstone rocks two tiles east and two south of you are mined from their north side, as the
+     * game walks (east is tried before south), not their west side.
      */
     private int search(int ox, int oy, Target t, int most)
     {

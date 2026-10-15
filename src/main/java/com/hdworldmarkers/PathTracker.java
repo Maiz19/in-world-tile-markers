@@ -64,12 +64,17 @@ final class PathTracker extends Overlay implements KeyListener
     /** A click found no route of its own: the active path follows where the client walks instead. */
     private boolean toDestination;
     /**
-     * Client ticks (a game tick's worth) after a click on an object in which the active path takes the client's
-     * destination once the click changes it: which side of an obstacle the game walks to, its own rules decide, and the
-     * route found here first could lead around it until the next game tick. The destination before the click.
+     * Client ticks (two game ticks' worth) after a click on an object in which the active path takes the server's flag
+     * once it comes: which side of an obstacle the game walks to, its own rules decide, and the route found here first
+     * could lead around it until the next game tick. The destination before the click.
      */
     private int watching;
     private LocalPoint clickDestination;
+    /**
+     * The flag the client puts down itself at a click, on the clicked object or tile, until the server sends where it
+     * walks you: no destination (taken as one, the path flew to the object and back).
+     */
+    private LocalPoint clickFlag;
 
     /** A clicked option: its kind, its parameters (scene x and y), its id and its character. */
     private static final class Click
@@ -203,13 +208,15 @@ final class PathTracker extends Overlay implements KeyListener
             Click c = click;
             toDestination = !start(target(c.type, c.x, c.y, c.id, c.actor, clickInMenu ? clickTile : hovered, null), clickRunning)
                 && !NOT_WALKING.contains(c.type) && !NOT_LEFT_CLICK.contains(c.type);
-            watching = OBJECT_OPTIONS.contains(c.type) ? 30 : 0;
+            watching = OBJECT_OPTIONS.contains(c.type) ? 60 : 0;
+            LocalPoint flag = client.getLocalDestinationLocation();
+            clickFlag = flag != null && !flag.equals(clickDestination) ? flag : null;
         }
         click = null;
         if (watching > 0)
         {
             watching--;
-            LocalPoint destination = client.getLocalDestinationLocation();
+            LocalPoint destination = serverDestination();
             if (destination != null && !destination.equals(clickDestination))
             {
                 watching = 0;
@@ -225,7 +232,7 @@ final class PathTracker extends Overlay implements KeyListener
         MenuEntry option = entries.length == 0 ? null : chosen(entries);
         Target t = minimap != null ? Target.tile(minimap) : hovered == null || option == null ? hoverPath.target
             : target(option.getType(), option.getParam0(), option.getParam1(), option.getIdentifier(), option.getActor(), hovered, hoverPath.target);
-        if (minimap != null && pressed) { start(t, runOnClick()); }
+        if (minimap != null && pressed) { start(t, runOnClick()); clickFlag = null; }
         pressed = false;
         mouseAt = client.getMouseCanvasPosition();
         lastHovered = hovered;
@@ -290,8 +297,8 @@ final class PathTracker extends Overlay implements KeyListener
     /** Each game tick: the active path against where you are; it ends, or is found again where you left it or its target moved. */
     private void follow(WorldPoint now)
     {
-        // The client walks elsewhere than this route ends: to its destination then.
-        LocalPoint destination = client.getLocalDestinationLocation();
+        // The server walks you elsewhere than this route ends: to its flag then.
+        LocalPoint destination = serverDestination();
         WorldPoint to = destination == null ? null : WorldPoint.fromLocal(client, destination);
         if (to != null && !to.equals(last(activePath.turns))) { reroute(Target.tile(to), now); }
         // Arrived, or moved more than two tiles (teleported, or another level).
@@ -314,6 +321,13 @@ final class PathTracker extends Overlay implements KeyListener
         mismatch = elsewhere;
         // To a character: on the last stretch, found again for where it stands now.
         if (activePath.target.actor != null && activePath.turns.size() < 2) { reroute(Target.of(activePath.target.actor), now); }
+    }
+
+    /** The client's destination once the server sets it; null while it is the client's own flag of the last click. */
+    private LocalPoint serverDestination()
+    {
+        LocalPoint destination = client.getLocalDestinationLocation();
+        return destination == null || destination.equals(clickFlag) ? null : destination;
     }
 
     private void reroute(Target t, WorldPoint from)

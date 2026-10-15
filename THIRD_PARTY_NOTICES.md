@@ -21,9 +21,9 @@ These files adapt parts of RuneLite; each names its origin in its header:
 - Source: https://github.com/GeChallengeM/path-marker (commit `495f3594bf697a1b9a5313802f731b2c85a6e37e`)
 - License: BSD 2-Clause, copyright (c) 2022 GeChallengeM. Full text in `src/main/resources/META-INF/LICENSE-path-marker`, included in the JAR.
 
-`src/main/resources/com/hdworldmarkers/loc_blocking.txt` (per object, the sides it cannot be used from) and `npc_blocking.txt` (NPCs that block walking) are Path Marker's lists of that commit, unchanged; the client's API offers neither. The path options in `HdWorldMarkersConfig.java` keep the option names and descriptions of its `PathMarkerConfig`.
+`src/main/resources/com/hdworldmarkers/npc_blocking.txt` (NPCs that block walking) is Path Marker's list of that commit, unchanged; the client's API does not offer it. `loc_blocking.txt` (per object, the sides it cannot be used from) keeps the format of Path Marker's list, but is made from the game cache (each object's blocking mask), so that it holds the objects added since. The path options in `HdWorldMarkersConfig.java` keep the option names and descriptions of its `PathMarkerConfig`.
 
-The path code, `PathTracker.java` and `RouteFinder.java`, is HD World Markers' own, written with Path Marker as the reference for its features and for the game's rules it follows (the client's route search, reach rules per object shape, and how the game steps along a route).
+The path code, `PathTracker.java` and `RouteFinder.java`, is HD World Markers' own, written with Path Marker as the reference for its features and for the game's rules it follows (the game's route search, reach rules per object shape, and how the game steps along a route).
 
 ## Tile Packs
 

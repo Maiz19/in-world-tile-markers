@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- Clicking an object no longer sends the active path onto the object for a moment: the flag the client puts on what you click is ignored until the game's own flag says where you walk.
+- Sides objects cannot be used from: the list is made from the game cache, with the objects of the last years (Varlamore and on) that it lacked, and the ones the game changed since.
+
 ## 1.1.0
 
 - Draw NPCs in front of marks (off by default, under NPCs; it costs frame rate): tagged NPCs are kept in front of the marks, as your own character is, so their tile marks lie under them; Shift + right-click an NPC, In front, does the same for an untagged NPC. It costs about a millisecond per such NPC on screen.
