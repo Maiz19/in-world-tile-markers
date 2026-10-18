@@ -61,16 +61,18 @@ public interface HdWorldMarkersConfig extends Config
     String currentSection = "currentTile";
     @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 6)
     String npcSection = "npcs";
-    @ConfigSection(name = "NPC styles", description = "Per style the names of the NPCs that have it, and its colors. Tag style on a tagged NPC adds or removes its name", position = 7)
+    @ConfigSection(name = "Slayer task", description = "Your Slayer task's NPCs, as the Slayer plugin finds them (it must be on)", position = 7)
+    String slayerSection = "slayerTask";
+    @ConfigSection(name = "NPC styles", description = "Per style the names of the NPCs that have it, and its colors. Tag style on a tagged NPC adds or removes its name", position = 8)
     String npcStyleSection = "npcStyles";
-    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 8)
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 9)
     String objectSection = "objects";
-    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 9)
+    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 10)
     String agilitySection = "agility";
-    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 10)
+    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 11)
     String activePathSection = "activePath";
 
-    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 11, closedByDefault = true)
+    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 12, closedByDefault = true)
     String hoverPathSection = "hoverPath";
 
     // General
@@ -248,21 +250,12 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcIgnorePets", name = "Ignore pets", description = "No highlight on pets", position = 4, section = npcSection)
     default boolean npcIgnorePets() { return true; }
 
-    @ConfigItem(keyName = "npcSlayerTask", name = "Slayer task", description = "Highlight the NPCs of your Slayer task, as the Slayer plugin finds them (it must be on)", position = 5, section = npcSection)
-    default boolean npcSlayerTask() { return false; }
-
-    @ConfigItem(keyName = "npcSlayerTaskStyles", name = "Slayer task styles", description = "The styles your Slayer task's NPCs get, in the Slayer task color. Ctrl + click picks more than one", position = 6, section = npcSection)
-    default Set<NpcStyle> npcSlayerTaskStyles() { return EnumSet.of(NpcStyle.TRUE_TILE); }
-
     @Alpha
     @ConfigItem(keyName = "npcsInFrontOfTiles", name = "Draw NPCs in front of marks (fps heavy)", description = "Tagged NPCs, and those under In front names, are drawn in front of the marks. Needs Through walls", position = 8, section = npcSection)
     default boolean npcsInFrontOfTiles() { return false; }
 
     @ConfigItem(keyName = "npcInFrontNames", name = "In front names", description = "Names of NPCs kept in front of the marks without being tagged, with NPCs in front of marks on: Shift + right-click an NPC, In front. Separated by commas; * matches any text", position = 9, section = npcSection)
     default String npcInFrontNames() { return ""; }
-
-    @ConfigItem(keyName = "npcSlayerTaskColor", name = "Slayer task color", description = "Border color of your Slayer task's NPCs, unless their name has a Tag color", position = 7, section = npcSection)
-    default Color npcSlayerTaskColor() { return new Color(224, 60, 49); }
 
     @ConfigItem(keyName = "npcSouthWestCorner", name = "South west as corner", description = "Draws the south west tile and south west true tile as a corner instead: the south west half of the tile, in Corner color and Corner fill", position = 10, section = npcSection)
     default boolean npcSouthWestCorner() { return false; }
@@ -298,6 +291,25 @@ public interface HdWorldMarkersConfig extends Config
 
     @ConfigItem(keyName = "npcCornerSize", name = "Corner size", description = "How much of the south west tile the corner covers: half or a quarter", position = 13, section = npcSection)
     default CornerSize npcCornerSize() { return CornerSize.HALF; }
+
+    // Slayer task
+
+    @ConfigItem(keyName = "npcSlayerTask", name = "Highlight Slayer task", description = "Highlight the NPCs of your Slayer task, as the Slayer plugin finds them (it must be on)", position = 0, section = slayerSection)
+    default boolean npcSlayerTask() { return false; }
+
+    @ConfigItem(keyName = "npcSlayerTaskStyles", name = "Styles", description = "The styles your Slayer task's NPCs get, in the colors below. Ctrl + click picks more than one", position = 1, section = slayerSection)
+    default Set<NpcStyle> npcSlayerTaskStyles() { return EnumSet.of(NpcStyle.TRUE_TILE); }
+
+    @Alpha
+    @ConfigItem(keyName = "npcSlayerTaskColor", name = "Border color", description = "Border color of your Slayer task's NPCs, unless their name has a Tag color", position = 2, section = slayerSection)
+    default Color npcSlayerTaskColor() { return new Color(224, 60, 49); }
+
+    @Alpha
+    @ConfigItem(keyName = "npcSlayerTaskFill", name = "Fill color", description = "Fill color of your Slayer task's tiles, hull and clickbox, unless their name has a Tag color", position = 3, section = slayerSection)
+    default Color npcSlayerTaskFill() { return new Color(224, 60, 49, 30); }
+
+    @ConfigItem(keyName = "npcSlayerTaskBorderWidth", name = "Border width", description = "Width of the border of your Slayer task's NPCs, unless their name has a Tag color", position = 4, section = slayerSection)
+    default double npcSlayerTaskBorderWidth() { return 2; }
 
     // Destination tile
 

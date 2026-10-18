@@ -488,6 +488,9 @@ final class MarkerSources
             NpcTag tag = tag(npc);
             int styles = look.styles(npc, task);
             Color own = look.own(tag, npc, task);
+            // Your task's NPCs without a Tag color take the Slayer task fill and width in every style.
+            boolean onTask = look.onTask(tag, npc, task);
+            double width = onTask ? look.taskWidth : look.width;
             int size = composition.getSize(), npcPlane = npc.getWorldView().getPlane(), offset = (size - 1) * 64;
             String key = "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex();
             LocalPoint local = npc.getLocalLocation();
@@ -495,19 +498,19 @@ final class MarkerSources
             WorldPoint server = (styles & (TRUE_TILE | SW_TRUE_TILE)) != 0 ? npc.getWorldLocation() : null;
             LocalPoint trueSw = server == null ? null : LocalPoint.fromWorld(npc.getWorldView(), server);
             if ((styles & TILE) != 0 && local != null)
-            { result.add(npcMarker(Marker.NPC_TILE, key + ":tile", local, npcPlane, size, or(own, look.tile), look.tileFill, look.width)); }
+            { result.add(npcMarker(Marker.NPC_TILE, key + ":tile", local, npcPlane, size, or(own, look.tile), onTask ? look.taskFill : look.tileFill, width)); }
             if ((styles & TRUE_TILE) != 0 && trueSw != null)
             {
                 result.add(npcMarker(Marker.NPC_TILE + 1, key + ":true", trueSw.plus(offset, offset), npcPlane, size, or(own, look.trueTile),
-                    look.trueTileFill, look.width));
+                    onTask ? look.taskFill : look.trueTileFill, width));
             }
             if ((styles & SW_TILE) != 0 && local != null)
             {
-                result.add(swMarker(Marker.NPC_TILE + 2, key + ":sw", local.plus(-offset, -offset), npcPlane, own, look.swTile, look.swTileFill, look));
+                result.add(swMarker(Marker.NPC_TILE + 2, key + ":sw", local.plus(-offset, -offset), npcPlane, own, look.swTile, look.swTileFill, onTask, look));
             }
             if ((styles & SW_TRUE_TILE) != 0 && trueSw != null)
             {
-                result.add(swMarker(Marker.NPC_TILE + 3, key + ":swtrue", trueSw, npcPlane, own, look.swTrueTile, look.swTrueTileFill, look));
+                result.add(swMarker(Marker.NPC_TILE + 3, key + ":swtrue", trueSw, npcPlane, own, look.swTrueTile, look.swTrueTileFill, onTask, look));
             }
         }
         // Marked objects' tile style: the stroke is capped at 2, as in Object Markers.
@@ -716,12 +719,14 @@ final class MarkerSources
     private static Marker npcMarker(int layer, String key, LocalPoint point, int plane, int size, Color color, Color fill, double width)
     { return layer(layer, new Marker(key, point, plane, size, size, color, fill, width, null)); }
 
-    /** A south-west tile style: the tile, or with South west as corner its south-west half in the corner's own colors. */
-    private static Marker swMarker(int layer, String key, LocalPoint point, int plane, Color own, Color color, Color fill, NpcLook look)
+    /** A south-west tile style: the tile, or with South west as corner its south-west half in the corner's own colors; on your task the task's fill and width. */
+    private static Marker swMarker(int layer, String key, LocalPoint point, int plane, Color own, Color color, Color fill, boolean onTask, NpcLook look)
     {
-        if (!look.swCorner) { return npcMarker(layer, key, point, plane, 1, or(own, color), fill, look.width); }
+        double width = onTask ? look.taskWidth : look.width;
+        if (!look.swCorner) { return npcMarker(layer, key, point, plane, 1, or(own, color), onTask ? look.taskFill : fill, width); }
         CornerSize size = look.cornerSize;
-        Marker m = npcMarker(layer, key + ":corner", point.plus(size.offset, size.offset), plane, 1, or(own, look.corner), look.cornerFill, look.width);
+        Marker m = npcMarker(layer, key + ":corner", point.plus(size.offset, size.offset), plane, 1, or(own, look.corner),
+            onTask ? look.taskFill : look.cornerFill, width);
         m.area = size.area;
         return m;
     }
@@ -740,7 +745,8 @@ final class MarkerSources
         final Color corner = config.npcCornerColor(), cornerFill = config.npcCornerFill();
         final CornerSize cornerSize = config.npcCornerSize() == null ? CornerSize.HALF : config.npcCornerSize();
         final int taskStyles = bits(config.npcSlayerTaskStyles());
-        final Color task = config.npcSlayerTaskColor();
+        final Color task = config.npcSlayerTaskColor(), taskFill = config.npcSlayerTaskFill();
+        final double taskWidth = config.npcSlayerTaskBorderWidth();
         final boolean ignoreDead = config.npcIgnoreDead(), ignorePets = config.npcIgnorePets();
         final Color tile = config.npcTileColor(), tileFill = config.npcTileFill(), trueTile = config.npcTrueTileColor(),
             trueTileFill = config.npcTrueTileFill(), swTile = config.npcSouthWestTileColor(), swTileFill = config.npcSouthWestTileFill(),
@@ -752,6 +758,9 @@ final class MarkerSources
 
         /** The color an NPC's styles take instead of their own: its name's Tag color, else the Slayer task's for one of your task. */
         Color own(NpcTag tag, NPC npc, Set<NPC> targets) { return tag != null && tag.color != null ? tag.color : targets.contains(npc) ? task : null; }
+
+        /** Whether an NPC is drawn in the Slayer task's fill and width: one of your task whose name has no Tag color. */
+        boolean onTask(NpcTag tag, NPC npc, Set<NPC> targets) { return (tag == null || tag.color == null) && targets.contains(npc); }
 
         /** Dead NPCs and pets as the options say (NPC Indicators' Ignore dead NPCs and Ignore pets). */
         boolean drawn(NPC npc)
@@ -783,15 +792,17 @@ final class MarkerSources
                 if ((styles & OUTLINE) != 0)
                 {
                     elsewhere.add(ModelTarget.npcOutline("npc:" + npc.getWorldView().getId() + ":" + npc.getIndex() + ":outline", npc,
-                        or(own, look.outline), look.width));
+                        or(own, look.outline), look.onTask(tag, npc, task) ? look.taskWidth : look.width));
                 }
                 continue;
             }
+            boolean onTask = look.onTask(tag, npc, task);
+            double width = onTask ? look.taskWidth : look.width;
             String key = "npc:" + npc.getIndex();
-            if ((styles & OUTLINE) != 0) { result.add(ModelTarget.npcOutline(key + ":outline", npc, or(own, look.outline), look.width)); }
-            if ((styles & HULL) != 0) { result.add(ModelTarget.npc(key + ":hull", npc, or(own, look.hull), look.hullFill, look.width)); }
+            if ((styles & OUTLINE) != 0) { result.add(ModelTarget.npcOutline(key + ":outline", npc, or(own, look.outline), width)); }
+            if ((styles & HULL) != 0) { result.add(ModelTarget.npc(key + ":hull", npc, or(own, look.hull), onTask ? look.taskFill : look.hullFill, width)); }
             if ((styles & CLICKBOX) != 0)
-            { result.add(ModelTarget.npcClickbox(key + ":clickbox", npc, or(own, look.clickbox), look.clickboxFill, look.width, client)); }
+            { result.add(ModelTarget.npcClickbox(key + ":clickbox", npc, or(own, look.clickbox), onTask ? look.taskFill : look.clickboxFill, width, client)); }
         }
         for (ObjectMarkerSource.Resolved o : visibleObjects())
         {
