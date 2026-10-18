@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0
+
+- Slayer task has its own section, with a fill color and border width of its own next to the styles and border color. They apply to every style your task's NPCs get, unless their name has a Tag color. Your Slayer settings stay as they were.
+
 ## 1.2.0
 
 - Other plugins can send routes as lines (`lines`, optional arrows): a line on the ground through the tiles' centres, broken where the route jumps, such as at a teleport. See the guide, For plugin developers.
