@@ -41,6 +41,17 @@ final class PathTracker extends Overlay implements KeyListener
         CC_OP, CC_OP_LOW_PRIORITY, PLAYER_EIGHTH_OPTION, WIDGET_CLOSE, WIDGET_CONTINUE, WIDGET_FIRST_OPTION, WIDGET_SECOND_OPTION,
         WIDGET_THIRD_OPTION, WIDGET_FOURTH_OPTION, WIDGET_FIFTH_OPTION, WIDGET_TARGET, WIDGET_TARGET_ON_WIDGET, WIDGET_TYPE_1,
         WIDGET_TYPE_4, WIDGET_TYPE_5);
+    /**
+     * Options on a thing (an object, ground item, character or player): their target needs no tile under the mouse,
+     * so they are routed at the click itself; until the next client tick the client shows its own flag on the thing.
+     */
+    private static final Set<MenuAction> ON_A_THING = EnumSet.of(GAME_OBJECT_FIRST_OPTION, GAME_OBJECT_SECOND_OPTION,
+        GAME_OBJECT_THIRD_OPTION, GAME_OBJECT_FOURTH_OPTION, GAME_OBJECT_FIFTH_OPTION, WIDGET_TARGET_ON_GAME_OBJECT,
+        GROUND_ITEM_FIRST_OPTION, GROUND_ITEM_SECOND_OPTION, GROUND_ITEM_THIRD_OPTION, GROUND_ITEM_FOURTH_OPTION,
+        GROUND_ITEM_FIFTH_OPTION, WIDGET_TARGET_ON_GROUND_ITEM, NPC_FIRST_OPTION, NPC_SECOND_OPTION, NPC_THIRD_OPTION,
+        NPC_FOURTH_OPTION, NPC_FIFTH_OPTION, WIDGET_TARGET_ON_NPC, PLAYER_FIRST_OPTION, PLAYER_SECOND_OPTION,
+        PLAYER_THIRD_OPTION, PLAYER_FOURTH_OPTION, PLAYER_FIFTH_OPTION, PLAYER_SIXTH_OPTION, PLAYER_SEVENTH_OPTION,
+        WIDGET_TARGET_ON_PLAYER);
     /** Options on objects: where they walk, the client's destination tells best (see watching). */
     private static final Set<MenuAction> OBJECT_OPTIONS = EnumSet.of(GAME_OBJECT_FIRST_OPTION, GAME_OBJECT_SECOND_OPTION,
         GAME_OBJECT_THIRD_OPTION, GAME_OBJECT_FOURTH_OPTION, GAME_OBJECT_FIFTH_OPTION, WIDGET_TARGET_ON_GAME_OBJECT);
@@ -64,6 +75,13 @@ final class PathTracker extends Overlay implements KeyListener
     /** A click found no route of its own: the active path follows where the client walks instead. */
     private boolean toDestination;
     /**
+     * The last click was on a target used from a distance (a banker across its booth): its walk stops where the
+     * server's flag does not, at approachEnd (null: you were in range, no walk). Kept after arrival, until the next click
+     * or the client's flag is gone.
+     */
+    private boolean approaching;
+    private WorldPoint approachEnd;
+    /**
      * Client ticks (two game ticks' worth) after a click on an object in which the active path takes the server's flag
      * once it comes: which side of an obstacle the game walks to, its own rules decide, and the route found here first
      * could lead around it until the next game tick. The destination before the click.
@@ -75,6 +93,8 @@ final class PathTracker extends Overlay implements KeyListener
      * walks you: no destination (taken as one, the path flew to the object and back).
      */
     private LocalPoint clickFlag;
+    /** The last click found its own route, which the active path is. */
+    private boolean clickRouted;
 
     /** A clicked option: its kind, its parameters (scene x and y), its id and its character. */
     private static final class Click
@@ -82,6 +102,8 @@ final class PathTracker extends Overlay implements KeyListener
         final MenuAction type;
         final int x, y, id;
         final Actor actor;
+        /** Routed already, at the click. */
+        boolean routed;
         Click(MenuEntry e) { type = e.getType(); x = e.getParam0(); y = e.getParam1(); id = e.getIdentifier(); actor = e.getActor(); }
     }
     private Point mouseAt;
@@ -169,6 +191,31 @@ final class PathTracker extends Overlay implements KeyListener
         }
     }
 
+    /**
+     * Where the walk you are on ends: the last tile of the path shown for it, so the destination tile and the path
+     * always agree. The predicted path to a walk target (guess; object: the object or wall it met) while markers shows
+     * it; else the active path; after a walk to a target used from a distance, where it stopped; your own tile where a
+     * click walks nowhere (beside what was clicked, or already in range). Null where no path knows: then the client's
+     * destination tells.
+     */
+    WorldPoint destination(Player me, WorldPoint guess, Target object)
+    {
+        // A Walk here is routed on the next client tick; until then the client's flag is on the tile clicked.
+        if (click != null && !click.routed && guess == null) { return null; }
+        if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(me.getWorldView(), guess)))
+        {
+            if (object == null) { return guess; }
+            predict(me, guess, object);
+            return predictedPath.main.isEmpty() ? me.getWorldLocation() : last(predictedPath.main);
+        }
+        if (!activePath.turns.isEmpty()) { return last(activePath.turns); }
+        if (approaching) { return approachEnd == null ? me.getWorldLocation() : approachEnd; }
+        // The client's own flag of the click lies on what was clicked (the server's comes a tick later): no walk. Before
+        // the next client tick that flag is not known yet, but every flag is the click's own.
+        LocalPoint flag = client.getLocalDestinationLocation();
+        return clickRouted && (click != null || clickFlag != null && clickFlag.equals(flag)) ? me.getWorldLocation() : null;
+    }
+
     /** Running on the active path, or for a click now when there is none. */
     boolean running() { return activePath.turns.isEmpty() ? runOnClick() : activePath.running; }
 
@@ -192,10 +239,37 @@ final class PathTracker extends Overlay implements KeyListener
     @Subscribe public void onMenuOptionClicked(MenuOptionClicked e)
     {
         click = new Click(e.getMenuEntry());
+        approaching = false;
+        clickRouted = false;
         clickDestination = client.getLocalDestinationLocation();
         clickInMenu = client.isMenuOpen();
         clickTile = lastHovered;
         clickRunning = runOnClick();
+        // A thing's route at once: frames drawn before the next client tick show it, not the client's flag on the thing.
+        Player me = client.getLocalPlayer();
+        if (ON_A_THING.contains(click.type) && me != null && routes.load(me.getWorldView())) { route(click, null); }
+    }
+
+    /** Routes a click: its route becomes the active path, or the active path follows where the client walks. */
+    private void route(Click c, Tile hovered)
+    {
+        clickRouted = start(target(c.type, c.x, c.y, c.id, c.actor, clickInMenu ? clickTile : hovered, null), clickRunning);
+        toDestination = !clickRouted && !NOT_WALKING.contains(c.type) && !NOT_LEFT_CLICK.contains(c.type);
+        watching = OBJECT_OPTIONS.contains(c.type) ? 60 : 0;
+        c.routed = true;
+    }
+
+    /**
+     * The game used a target from a distance (its bank, collection box or chat opened): the server stopped you where
+     * you stand, also where the route found here went on. No walk when you never moved.
+     */
+    @Subscribe public void onWidgetLoaded(WidgetLoaded e)
+    {
+        int id = e.getGroupId();
+        Player me = client.getLocalPlayer();
+        if (!approaching || me == null || id != InterfaceID.BANKMAIN && id != InterfaceID.GE_COLLECT && id != InterfaceID.CHAT_LEFT) { return; }
+        approachEnd = approachEnd == null ? null : me.getWorldLocation();
+        activePath.clear();
     }
 
     @Subscribe public void onClientTick(ClientTick e)
@@ -205,10 +279,7 @@ final class PathTracker extends Overlay implements KeyListener
         Tile hovered = me.getWorldView().getSelectedSceneTile();
         if (click != null)
         {
-            Click c = click;
-            toDestination = !start(target(c.type, c.x, c.y, c.id, c.actor, clickInMenu ? clickTile : hovered, null), clickRunning)
-                && !NOT_WALKING.contains(c.type) && !NOT_LEFT_CLICK.contains(c.type);
-            watching = OBJECT_OPTIONS.contains(c.type) ? 60 : 0;
+            if (!click.routed) { route(click, hovered); }
             LocalPoint flag = client.getLocalDestinationLocation();
             clickFlag = flag != null && !flag.equals(clickDestination) ? flag : null;
         }
@@ -232,7 +303,7 @@ final class PathTracker extends Overlay implements KeyListener
         MenuEntry option = entries.length == 0 ? null : chosen(entries);
         Target t = minimap != null ? Target.tile(minimap) : hovered == null || option == null ? hoverPath.target
             : target(option.getType(), option.getParam0(), option.getParam1(), option.getIdentifier(), option.getActor(), hovered, hoverPath.target);
-        if (minimap != null && pressed) { start(t, runOnClick()); clickFlag = null; }
+        if (minimap != null && pressed) { clickRouted = start(t, runOnClick()); clickFlag = null; }
         pressed = false;
         mouseAt = client.getMouseCanvasPosition();
         lastHovered = hovered;
@@ -249,6 +320,8 @@ final class PathTracker extends Overlay implements KeyListener
         if (toDestination && activePath.turns.isEmpty() && destination != null) { start(Target.tile(WorldPoint.fromLocal(client, destination)), runOnClick()); }
         toDestination = false;
         if (!activePath.turns.isEmpty()) { follow(now); }
+        // Arrived and the client's flag is gone: a later walk the server starts is no longer this one.
+        if (approaching && activePath.turns.isEmpty() && destination == null) { approaching = false; }
         walk(activePath, now, false);
         hoverTo(hoverPath.target, now, true);
         lastTile = now;
@@ -259,9 +332,10 @@ final class PathTracker extends Overlay implements KeyListener
     {
         // Shown nowhere (by default): no route search every time the mouse moves; found again once it is shown.
         if (!shows(false, false) && !shows(false, true)) { hoverPath.clear(); return; }
-        if (t == null ? hoverPath.target != null : !t.same(hoverPath.target) || !from.equals(hoverPath.from))
+        // Toward a target used from a distance, where the walk stops depends on running too.
+        if (t == null ? hoverPath.target != null : !t.same(hoverPath.target) || !from.equals(hoverPath.from) || t.range > 1 && runOnClick() != hoverPath.running)
         {
-            List<WorldPoint> turns = t == null ? null : routes.find(from, t);
+            List<WorldPoint> turns = t == null ? null : routes.approach(from, t, routes.find(from, t), runOnClick());
             hoverPath.turns = turns == null ? Collections.emptyList() : turns;
             hoverPath.target = t;
             hoverPath.from = from;
@@ -282,11 +356,13 @@ final class PathTracker extends Overlay implements KeyListener
     private boolean start(Target t, boolean running)
     {
         WorldPoint from = client.getLocalPlayer().getWorldLocation();
-        List<WorldPoint> turns = t == null ? null : routes.find(from, t);
+        List<WorldPoint> turns = t == null ? null : routes.approach(from, t, routes.find(from, t), running);
         if (turns == null) { return false; }
         activePath.target = t;
         activePath.turns = turns;
         activePath.running = running;
+        approaching = t.range > 1;
+        approachEnd = turns.isEmpty() ? null : last(turns);
         fresh = true;
         mismatch = false;
         lastTile = from;
@@ -297,8 +373,9 @@ final class PathTracker extends Overlay implements KeyListener
     /** Each game tick: the active path against where you are; it ends, or is found again where you left it or its target moved. */
     private void follow(WorldPoint now)
     {
-        // The server walks you elsewhere than this route ends: to its flag then.
-        LocalPoint destination = serverDestination();
+        // The server walks you elsewhere than this route ends: to its flag then. Its flag lies beyond where a walk to a
+        // target used from a distance stops.
+        LocalPoint destination = activePath.target.range > 1 ? null : serverDestination();
         WorldPoint to = destination == null ? null : WorldPoint.fromLocal(client, destination);
         if (to != null && !to.equals(last(activePath.turns))) { reroute(Target.tile(to), now); }
         // Arrived, or moved more than two tiles (teleported, or another level).
@@ -332,8 +409,11 @@ final class PathTracker extends Overlay implements KeyListener
 
     private void reroute(Target t, WorldPoint from)
     {
-        List<WorldPoint> turns = routes.find(from, t);
-        if (turns != null) { activePath.turns = turns; fresh = false; }
+        List<WorldPoint> turns = routes.approach(from, t, routes.find(from, t), activePath.running);
+        if (turns == null) { return; }
+        activePath.turns = turns;
+        fresh = false;
+        if (approaching) { approachEnd = turns.isEmpty() ? null : last(turns); }
     }
 
     private static WorldPoint last(List<WorldPoint> points) { return points.get(points.size() - 1); }
@@ -493,7 +573,10 @@ final class PathTracker extends Overlay implements KeyListener
      * beyond what the client routes (MarkerSources.predictedTarget), its path too, while no active path exists or the
      * target lies beyond the loaded area.
      */
-    List<Marker> markers(WorldPoint guess)
+    List<Marker> markers(WorldPoint guess) { return markers(guess, null); }
+
+    /** As markers(guess), where the predicted click met an object or wall (object), which the path goes beside. */
+    List<Marker> markers(WorldPoint guess, Target object)
     {
         List<Marker> out = new ArrayList<>();
         Player me = client.getLocalPlayer();
@@ -506,7 +589,7 @@ final class PathTracker extends Overlay implements KeyListener
         if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(wv, guess)))
         {
             if (config.activePathDrawMode() == DrawMode.TARGET_TILE) { out.add(active.marker(guess, true)); }
-            else { predict(me, guess); each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main))); }
+            else { predict(me, guess, object); each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main))); }
         }
         return out;
     }
@@ -544,11 +627,12 @@ final class PathTracker extends Overlay implements KeyListener
      * on through a renderer's extended view where it is loaded (around water, walls and objects), then straight on,
      * since beyond that nothing is known. Found again only when the target, your tile or running changes.
      */
-    private void predict(Player me, WorldPoint guess)
+    private void predict(Player me, WorldPoint guess, Target object)
     {
         WorldPoint from = me.getWorldLocation();
-        if (Target.tile(guess).same(predictedPath.target) && from.equals(predictedPath.from) && predictedPath.running == running()) { return; }
-        predictedPath.target = Target.tile(guess);
+        Target target = object != null ? object : Target.tile(guess);
+        if (target.same(predictedPath.target) && from.equals(predictedPath.from) && predictedPath.running == running()) { return; }
+        predictedPath.target = target;
         predictedPath.from = from;
         predictedPath.running = running();
         WorldView wv = me.getWorldView();
@@ -556,8 +640,10 @@ final class PathTracker extends Overlay implements KeyListener
         // This runs while every mark is collected: a failure leaves only the straight line.
         try
         {
-            List<WorldPoint> route = routes.load(wv) ? routes.findBeyond(from, Target.tile(routes.clampKnown(guess))) : null;
+            // An object or wall is walked beside, from a side the game allows, as a click on it walks.
+            List<WorldPoint> route = !routes.load(wv) ? null : routes.findBeyond(from, object != null ? object : Target.tile(routes.clampKnown(guess)));
             if (route != null) { turns.addAll(route); }
+            if (object != null && route != null) { predictedPath.turns = turns; walk(predictedPath, from, true); return; }
         }
         catch (RuntimeException ex)
         {

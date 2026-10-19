@@ -302,7 +302,7 @@ public class HdWorldMarkersPlugin extends Plugin
     /** The path tiles, with a predicted path while a walk target is predicted (PathTracker.markers). */
     List<Marker> pathTiles()
     {
-        return paths.markers(sources.predictedTarget(client.getLocalPlayer(), System.currentTimeMillis()));
+        return paths.markers(sources.predictedTarget(client.getLocalPlayer(), System.currentTimeMillis()), sources.predictedObject());
     }
 
     private void fail(RuntimeException ex)
@@ -331,13 +331,16 @@ public class HdWorldMarkersPlugin extends Plugin
         WorldView wv = client.getLocalPlayer().getWorldView();
         Tile tile = wv.getSelectedSceneTile();
         WorldPoint target = tile != null ? tile.getWorldLocation() : null;
+        RouteFinder.Target object = null;
         if (target == null && config.predictWalk() && client.getMouseCanvasPosition() != null)
         {
-            // No tile under the mouse, such as 117 HD's extended terrain: find where the click meets the ground.
-            target = WalkPredictor.raycast(ModelShapes.Camera.of(client), client.getMouseCanvasPosition().getX(), client.getMouseCanvasPosition().getY(),
-                wv, wv.getPlane());
+            // No tile under the mouse, such as 117 HD's extended terrain: find what the click meets, an object or the ground.
+            WalkPredictor.Hit hit = WalkPredictor.hit(ModelShapes.Camera.of(client), client.getMouseCanvasPosition().getX(),
+                client.getMouseCanvasPosition().getY(), wv, wv.getPlane());
+            target = hit == null ? null : hit.tile;
+            object = hit == null ? null : hit.object;
         }
-        if (target != null) { sources.walkedTo(target); }
+        if (target != null) { sources.walkedTo(target, object); }
     }
 
     @Subscribe public void onGameStateChanged(GameStateChanged e)

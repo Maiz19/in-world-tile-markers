@@ -92,6 +92,8 @@ final class MarkerSources
     private final Set<NPC> inFront = Collections.newSetFromMap(new IdentityHashMap<>());
     // Fadeout and predicted destination state.
     private WorldPoint lastPlayerTile, lastDestination, predicted;
+    /** The object or wall the predicted click met, which the walk goes beside as the game's rules say; null: a tile. */
+    private RouteFinder.Target predictedObject;
     private long stillSince, arrivedAt, predictedAt;
     /** Last hitsplat on you or your target; combat lasts COMBAT_MS after it. */
     private long lastHit;
@@ -199,6 +201,8 @@ final class MarkerSources
 
     /** Your Slayer task's NPCs, from the Slayer plugin. */
     @Inject SlayerPluginService slayer;
+    /** The paths, whose end the destination tile is; null in tests that leave it out (the client's destination then). */
+    @Inject PathTracker paths;
 
     /** The NPCs of your Slayer task as the Slayer plugin finds them, with the Slayer task option on; else none. */
     private Set<NPC> taskTargets()
@@ -559,27 +563,24 @@ final class MarkerSources
     /**
      * The destination tile: the predicted walk target while it is active and the
      * client confirms a route beyond the loaded area, else the
-     * client's destination, else the last destination fading out after arrival.
+     * client's destination (where the walk stops, for a banker across its booth), else the last destination fading out
+     * after arrival.
      */
     private Marker destination(WorldView wv, Player player, int plane, long now)
     {
         LocalPoint local = client.getLocalDestinationLocation();
         WorldPoint target = null;
-        LocalPoint point = null;
         float alpha = 1;
+        // Where the path shown ends; only where no path knows, the client's destination. The prediction expires here too.
         WorldPoint prediction = predictedTarget(player, now);
-        if (prediction != null && local != null && outside(wv, prediction))
+        WorldPoint walk = paths == null ? null : paths.destination(player, prediction, predictedObject());
+        if (walk == null && local != null) { walk = WorldPoint.fromLocal(wv, local.getX(), local.getY(), plane); }
+        if (walk != null)
         {
-            target = prediction;
-            point = local(wv, prediction);
-        }
-        else if (local != null)
-        {
-            target = WorldPoint.fromLocal(wv, local.getX(), local.getY(), plane);
-            // Clicking the tile you stand on is not shown. A walk that just arrived there keeps its
+            // A walk to the tile you stand on is not shown. A walk that just arrived there keeps its
             // destination (already remembered), so it does not blink before the fadeout.
-            if (target.equals(player.getWorldLocation()) && !target.equals(lastDestination)) { return null; }
-            lastDestination = target;
+            if (walk.equals(player.getWorldLocation()) && !walk.equals(lastDestination)) { return null; }
+            target = lastDestination = walk;
             arrivedAt = 0;
         }
         else if (lastDestination != null && config.destinationTileFadeout())
@@ -589,7 +590,7 @@ final class MarkerSources
             target = lastDestination;
             if (alpha <= 0) { lastDestination = null; }
         }
-        if (point == null && target != null) { point = LocalPoint.fromWorld(wv, target); }
+        LocalPoint point = target == null ? null : local(wv, target);
         if (point == null || alpha <= 0) { return null; }
         return corners(config.destinationTileCornersOnly(), config.destinationTileCornerSize(),
             layer(Marker.DESTINATION, new Marker("destination", point, plane, 1, 1, scale(config.highlightDestinationColor(), alpha),
@@ -662,9 +663,16 @@ final class MarkerSources
         return new LocalPoint((p.getX() - wv.getBaseX()) * 128 + 64, (p.getY() - wv.getBaseY()) * 128 + 64, wv.getId());
     }
 
+    /** The object or wall of the predicted walk target, while there is one; null for a tile. */
+    RouteFinder.Target predictedObject() { return predicted == null ? null : predictedObject; }
+
     /** Remembers the tile clicked with Walk here, for the predicted destination and path. */
-    void walkedTo(WorldPoint tile)
+    void walkedTo(WorldPoint tile) { walkedTo(tile, null); }
+
+    /** As walkedTo, where the click met an object or wall (object; null: the ground). */
+    void walkedTo(WorldPoint tile, RouteFinder.Target object)
     {
+        predictedObject = object;
         Player player = client.getLocalPlayer();
         // Clicking the tile you already stand on goes nowhere: no prediction, no destination.
         predicted = player != null && tile != null && tile.equals(player.getWorldLocation()) ? null : tile;

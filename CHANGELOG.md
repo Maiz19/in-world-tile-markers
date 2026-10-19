@@ -3,6 +3,7 @@
 ## 1.3.1
 
 - Fixed active pathing to clicked objects in extended chunks.
+- Improvements to active path and destination tile.
 
 ## 1.3.0
 

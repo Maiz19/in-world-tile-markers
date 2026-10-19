@@ -228,6 +228,71 @@ class RouteFinder
         return turns;
     }
 
+    /**
+     * For a target used from a distance (Target.range): the turns cut where the walk along them stops, at the end of
+     * the first game tick (a step walking, two running) that leaves you within range with a line of sight to it; none
+     * when you already are. Other targets' turns as they are.
+     */
+    List<WorldPoint> approach(WorldPoint from, Target t, List<WorldPoint> turns, boolean running)
+    {
+        if (turns == null || t == null || t.range <= 1) { return turns; }
+        if (inRange(from, t)) { return new ArrayList<>(); }
+        List<WorldPoint> out = new ArrayList<>();
+        WorldPoint at = from;
+        int steps = 0;
+        for (WorldPoint turn : turns)
+        {
+            while (at.getX() != turn.getX() || at.getY() != turn.getY())
+            {
+                WorldPoint next = step(at, turn);
+                if (next == null) { return turns; }
+                at = next;
+                if (++steps % (running ? 2 : 1) == 0 && inRange(at, t)) { out.add(at); return out; }
+            }
+            out.add(turn);
+        }
+        return turns;
+    }
+
+    /** Whether the target can be used from p at a distance: not on it, within its range, with a line of sight. */
+    private boolean inRange(WorldPoint p, Target t)
+    {
+        int dx = Math.max(t.x - p.getX(), p.getX() - t.x - t.width + 1), dy = Math.max(t.y - p.getY(), p.getY() - t.y - t.height + 1);
+        if (dx <= 0 && dy <= 0 || Math.max(dx, dy) > t.range) { return false; }
+        int x = p.getX() - baseX, y = p.getY() - baseY;
+        for (int i = 0; i < t.width; i++)
+        {
+            for (int j = 0; j < t.height; j++) { if (sight(x, y, t.x - baseX + i, t.y - baseY + j)) { return true; } }
+        }
+        return false;
+    }
+
+    /**
+     * The game's line of sight between scene tiles: along the longer axis a tile at a time, the other axis at the
+     * line's height rounded; blocked by a tile that blocks it and by a wall that blocks it on a side the line crosses.
+     */
+    private boolean sight(int x0, int y0, int x1, int y1)
+    {
+        int dx = x1 - x0, dy = y1 - y0;
+        // Per axis the walls the line crosses, on the tile it enters: west 0x10000, east 0x1000, south 0x4000, north 0x400.
+        int xFlags = 0x20000 | (dx < 0 ? 0x1000 : 0x10000), yFlags = 0x20000 | (dy < 0 ? 0x400 : 0x4000);
+        boolean alongX = Math.abs(dx) > Math.abs(dy);
+        int steps = Math.abs(alongX ? dx : dy), along = alongX ? x0 : y0, step = (alongX ? dx : dy) < 0 ? -1 : 1;
+        int across = ((alongX ? y0 : x0) << 16) + 0x8000 - ((alongX ? dy : dx) < 0 ? 1 : 0);
+        int slope = steps == 0 ? 0 : ((alongX ? dy : dx) << 16) / steps;
+        for (int k = 0; k < steps; k++)
+        {
+            along += step;
+            // Unknown tiles (-1) block it too.
+            int a = across >>> 16;
+            if (((alongX ? flag(along, a) : flag(a, along)) & (alongX ? xFlags : yFlags)) != 0) { return false; }
+            across += slope;
+            int b = across >>> 16;
+            if (b != a && ((alongX ? flag(along, b) : flag(b, along)) & (alongX ? yFlags : xFlags)) != 0) { return false; }
+        }
+        return true;
+    }
+
     /** The scene tiles {x, y} you can walk to from scene tile (x, y) in at most `most` steps, by the collision flags alone. */
     List<int[]> reachable(int x, int y, int most)
     {
@@ -345,6 +410,8 @@ class RouteFinder
         final int closedSides;
         /** A character to walk to, which moves. */
         final Actor actor;
+        /** How far away it can be used from, with a line of sight; 1: only from beside it, by the rules of its kind. */
+        int range = 1;
 
         Target(int x, int y, int width, int height, int shape, int rotation, int closedSides, Actor actor)
         {
@@ -357,8 +424,15 @@ class RouteFinder
         static Target of(Actor a)
         {
             WorldPoint p = a.getWorldLocation();
-            int size = a instanceof NPC ? ((NPC) a).getComposition().getSize() : 1;
-            return new Target(p.getX(), p.getY(), size, size, ACTOR, 0, 0, a);
+            NPCComposition c = a instanceof NPC ? ((NPC) a).getComposition() : null;
+            int size = c != null ? c.getSize() : 1;
+            Target t = new Target(p.getX(), p.getY(), size, size, ACTOR, 0, 0, a);
+            // Bankers are used from two tiles away, across the bank booth between you. An NPC that changes form (such
+            // as the Grand Exchange's bankers) has its options only in its current form.
+            NPCComposition now = a instanceof NPC ? ((NPC) a).getTransformedComposition() : null;
+            String[] actions = now != null ? now.getActions() : c != null ? c.getActions() : null;
+            if (actions != null && Arrays.asList(actions).contains("Bank")) { t.range = 2; }
+            return t;
         }
 
         /** An object with the client's config (shape in bits 0-4, rotation in bits 6-7). */
@@ -372,7 +446,12 @@ class RouteFinder
                 (sides << rotation + 1 | sides >> 3 - rotation) & 15, null);
         }
 
-        Target shifted(int dx, int dy) { return new Target(x + dx, y + dy, width, height, shape, rotation, closedSides, actor); }
+        Target shifted(int dx, int dy)
+        {
+            Target t = new Target(x + dx, y + dy, width, height, shape, rotation, closedSides, actor);
+            t.range = range;
+            return t;
+        }
 
         boolean same(Target o)
         {
