@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- Fixed active pathing to clicked objects in extended chunks.
+
 ## 1.3.0
 
 - Slayer task has its own section, with a fill color and border width of its own next to the styles and border color. They apply to every style your task's NPCs get, unless their name has a Tag color. Your Slayer settings stay as they were.
