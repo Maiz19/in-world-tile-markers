@@ -117,6 +117,22 @@ And how to draw it:
 | `fill` | optional, not for `outline` | black at alpha 50 |
 | `width` | optional: border width in pixels | 2 |
 
+A player's tile, in a colour of your own per player:
+
+```java
+Map<String, Object> friend = new HashMap<>();
+friend.put("player", player);                     // or "name", "Some Friend"
+friend.put("style", "tile");                      // or "styles", List.of("tile", "outline")
+friend.put("color", Color.GREEN);
+
+Map<String, Object> data = new HashMap<>();
+data.put("owner", "my-plugin");
+data.put("players", List.of(friend));             // every player you highlight, in one list
+eventBus.post(new PluginMessage("hd-world-markers", "players", data));
+```
+
+Send the whole list again whenever it changes (a player comes into view, a new friend): each message replaces the last.
+
 `tile` follows an NPC or player as it walks; `truetile` is the tile the server has it on; `swtile` and `swtruetile` are the south-west tile of those (one tile, for a large NPC). An object or item has one tile style: its footprint. A thing sent as itself is drawn while it is there: a despawned NPC or player, or an object gone from its tile, is not. One sent by index, name or tile and id is looked up anew all the time, so it is found again when it comes back. In an instance a tile and id can be the template tile or the tile as it is there, as for tiles. On a boat or other world view of its own only the outline is drawn.
 
 **Timer pies**
