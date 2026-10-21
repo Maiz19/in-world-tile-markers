@@ -467,44 +467,47 @@ public interface HdWorldMarkersConfig extends Config
         @Override public String toString() { return label; }
     }
 
+    @ConfigItem(keyName = "interactHighlight", name = "Interact highlight", description = "Highlights what the mouse is on and what you clicked or interact with, as RuneLite's Interact Highlight. Turn that plugin off when you use this, or both are drawn", position = 0, section = interactSection)
+    default boolean interactHighlight() { return false; }
+
     // Not "interactThings": that held Players too, which the plugin no longer highlights (as RuneLite's Interact Highlight).
-    @ConfigItem(keyName = "interactTargets", name = "Highlight", description = "What gets highlighted: NPCs, objects and ground items (players never, as in RuneLite's Interact Highlight). Ctrl + click picks more than one", position = 0, section = interactSection)
+    @ConfigItem(keyName = "interactTargets", name = "Highlight", description = "What gets highlighted: NPCs, objects and ground items (players never, as in RuneLite's Interact Highlight). Ctrl + click picks more than one", position = 1, section = interactSection)
     default Set<Interactable> interactThings() { return EnumSet.allOf(Interactable.class); }
 
-    @ConfigItem(keyName = "interactHoverStyles", name = "Hover styles", description = "How what the mouse is on is highlighted; none (the default) turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 1, section = interactSection)
-    default Set<InteractStyle> interactHoverStyles() { return EnumSet.noneOf(InteractStyle.class); }
+    @ConfigItem(keyName = "interactHoverStyles", name = "Hover styles", description = "How what the mouse is on is highlighted (outline by default); none turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 2, section = interactSection)
+    default Set<InteractStyle> interactHoverStyles() { return EnumSet.of(InteractStyle.OUTLINE); }
 
-    @ConfigItem(keyName = "interactStyles", name = "Interact styles", description = "How what you clicked or interact with is highlighted, until you get there or stop; none (the default) turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 2, section = interactSection)
-    default Set<InteractStyle> interactStyles() { return EnumSet.noneOf(InteractStyle.class); }
+    @ConfigItem(keyName = "interactStyles", name = "Interact styles", description = "How what you clicked or interact with is highlighted, until you get there or stop (outline by default); none turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 3, section = interactSection)
+    default Set<InteractStyle> interactStyles() { return EnumSet.of(InteractStyle.OUTLINE); }
 
     @Alpha
-    @ConfigItem(keyName = "interactHoverColor", name = "Hover color", description = "Border color of the object or ground item the mouse is on", position = 3, section = interactSection)
+    @ConfigItem(keyName = "interactHoverColor", name = "Hover color", description = "Border color of the object or ground item the mouse is on", position = 4, section = interactSection)
     default Color interactHoverColor() { return new Color(0x9000FFFF, true); }
 
     @Alpha
-    @ConfigItem(keyName = "interactHoverFill", name = "Hover fill", description = "Fill color of the hull, clickbox and tiles of the object or ground item the mouse is on", position = 4, section = interactSection)
+    @ConfigItem(keyName = "interactHoverFill", name = "Hover fill", description = "Fill color of the hull, clickbox and tiles of the object or ground item the mouse is on", position = 5, section = interactSection)
     default Color interactHoverFill() { return new Color(0x0000FFFF, true); }
 
     @Alpha
-    @ConfigItem(keyName = "interactNpcHoverColor", name = "NPC hover color", description = "Border color of the NPC the mouse is on", position = 5, section = interactSection)
+    @ConfigItem(keyName = "interactNpcHoverColor", name = "NPC hover color", description = "Border color of the NPC the mouse is on", position = 6, section = interactSection)
     default Color interactNpcHoverColor() { return new Color(0x9000FFFF, true); }
 
     @Alpha
-    @ConfigItem(keyName = "interactNpcHoverFill", name = "NPC hover fill", description = "Fill color of the hull, clickbox and tiles of the NPC the mouse is on", position = 6, section = interactSection)
+    @ConfigItem(keyName = "interactNpcHoverFill", name = "NPC hover fill", description = "Fill color of the hull, clickbox and tiles of the NPC the mouse is on", position = 7, section = interactSection)
     default Color interactNpcHoverFill() { return new Color(0x0000FFFF, true); }
 
     @Alpha
-    @ConfigItem(keyName = "interactColor", name = "Interact color", description = "Border color of what you clicked or interact with", position = 7, section = interactSection)
+    @ConfigItem(keyName = "interactColor", name = "Interact color", description = "Border color of what you clicked or interact with", position = 8, section = interactSection)
     default Color interactColor() { return new Color(0x90FF0000, true); }
 
     @Alpha
-    @ConfigItem(keyName = "interactFill", name = "Interact fill", description = "Fill color of the hull, clickbox and tiles of what you clicked or interact with", position = 8, section = interactSection)
+    @ConfigItem(keyName = "interactFill", name = "Interact fill", description = "Fill color of the hull, clickbox and tiles of what you clicked or interact with", position = 9, section = interactSection)
     default Color interactFill() { return new Color(0x00FF0000, true); }
 
-    @ConfigItem(keyName = "interactBorderWidth", name = "Border width", description = "Width of the borders", position = 9, section = interactSection)
+    @ConfigItem(keyName = "interactBorderWidth", name = "Border width", description = "Width of the borders", position = 10, section = interactSection)
     default double interactBorderWidth() { return 3; }
 
-    @ConfigItem(keyName = "interactHideInCombat", name = "Hide in combat", description = "No hover or interact highlight while you are in combat (you hit or were hit in the last 6 seconds, or you or an NPC is attacking), nor on NPCs you can attack", position = 10, section = interactSection)
+    @ConfigItem(keyName = "interactHideInCombat", name = "Hide in combat", description = "No hover or interact highlight while you are in combat (you hit or were hit in the last 6 seconds, or you or an NPC is attacking), nor on NPCs you can attack", position = 11, section = interactSection)
     default boolean interactHideInCombat() { return false; }
 
     // Agility, as RuneLite's Agility plugin

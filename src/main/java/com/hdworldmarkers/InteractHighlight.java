@@ -141,7 +141,8 @@ final class InteractHighlight
      */
     private void each(Shown shown)
     {
-        // No style picked: off.
+        // Turned off, or no style picked.
+        if (!config.interactHighlight()) { return; }
         boolean hover = !config.interactHoverStyles().isEmpty(), interact = !config.interactStyles().isEmpty();
         if (!hover && !interact) { return; }
         Set<Interactable> things = config.interactThings();
