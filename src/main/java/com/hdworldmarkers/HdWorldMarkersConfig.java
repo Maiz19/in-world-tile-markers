@@ -50,34 +50,36 @@ public interface HdWorldMarkersConfig extends Config
 
     @ConfigSection(name = "General", description = "General options", position = 0)
     String generalSection = "general";
-    @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, HD Mark", position = 1)
+    @ConfigSection(name = "Text", description = "The text of marks: tile marker labels and text from other plugins", position = 1, closedByDefault = true)
+    String textSection = "text";
+    @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, HD Mark", position = 2)
     String groundSection = "ground";
-    @ConfigSection(name = "Line markers", description = "Lines you draw along tile sides: Shift + right-click a tile, HD Add line; the mouse wheel turns a new line while Shift is held", position = 2, closedByDefault = true)
+    @ConfigSection(name = "Line markers", description = "Lines you draw along tile sides: Shift + right-click a tile, HD Add line; the mouse wheel turns a new line while Shift is held", position = 3, closedByDefault = true)
     String lineSection = "lines";
-    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 3, closedByDefault = true)
+    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 4, closedByDefault = true)
     String destinationSection = "destinationTile";
-    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 4, closedByDefault = true)
+    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 5, closedByDefault = true)
     String hoveredSection = "hoveredTile";
-    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 5, closedByDefault = true)
+    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 6, closedByDefault = true)
     String currentSection = "currentTile";
-    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, HD Tag-All", position = 6, closedByDefault = true)
+    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, HD Tag-All", position = 7, closedByDefault = true)
     String npcSection = "npcs";
-    @ConfigSection(name = "Slayer task", description = "Your Slayer task's NPCs, as the Slayer plugin finds them (it must be on)", position = 7, closedByDefault = true)
+    @ConfigSection(name = "Slayer task", description = "Your Slayer task's NPCs, as the Slayer plugin finds them (it must be on)", position = 8, closedByDefault = true)
     String slayerSection = "slayerTask";
-    @ConfigSection(name = "NPC styles", description = "Per style its colors; the names of the NPCs that have it are under NPC names", position = 8, closedByDefault = true)
+    @ConfigSection(name = "NPC styles", description = "Per style its colors; the names of the NPCs that have it are under NPC names", position = 9, closedByDefault = true)
     String npcStyleSection = "npcStyles";
-    @ConfigSection(name = "NPC names", description = "Per NPC style the names of the NPCs that have it, separated by commas; * matches any text. Tag style on a tagged NPC adds or removes its name", position = 9, closedByDefault = true)
+    @ConfigSection(name = "NPC names", description = "Per NPC style the names of the NPCs that have it, separated by commas; * matches any text. Tag style on a tagged NPC adds or removes its name", position = 10, closedByDefault = true)
     String npcNamesSection = "npcNames";
-    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, HD Mark object", position = 10, closedByDefault = true)
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, HD Mark object", position = 11, closedByDefault = true)
     String objectSection = "objects";
-    @ConfigSection(name = "Interact highlight", description = "Interact Highlight: what the mouse is on and what you clicked, in the styles you pick", position = 11, closedByDefault = true)
+    @ConfigSection(name = "Interact highlight", description = "Interact Highlight: what the mouse is on and what you clicked, in the styles you pick", position = 12, closedByDefault = true)
     String interactSection = "interact";
-    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 12, closedByDefault = true)
+    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 13, closedByDefault = true)
     String agilitySection = "agility";
-    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 13, closedByDefault = true)
+    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 14, closedByDefault = true)
     String activePathSection = "activePath";
 
-    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 14, closedByDefault = true)
+    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 15, closedByDefault = true)
     String hoverPathSection = "hoverPath";
 
     // General
@@ -97,6 +99,47 @@ public interface HdWorldMarkersConfig extends Config
 
     @ConfigItem(keyName = "predictWalk", name = "Predict walk target", description = "After Walk here, show the clicked tile as destination and a predicted path, also when you click beyond the loaded area (such as 117 HD's extended terrain). Beyond it the path follows what the extended view shows (heights, water, walls, objects) as far as it is loaded, then a straight line.", position = 2, section = generalSection)
     default boolean predictWalk() { return true; }
+
+    // Text
+
+    @ConfigItem(keyName = "hdText", name = "Render text in HD (experimental)", description = "Draw the text of marks in the game world like the marks themselves, sharp in stretched mode, instead of as 2D text", position = 0, section = textSection)
+    default boolean hdText() { return false; }
+
+    enum TextFont
+    {
+        RUNESCAPE("RuneScape"), RUNESCAPE_BOLD("RuneScape bold"), RUNESCAPE_SMALL("RuneScape small"), SMOOTH("Smooth"), SMOOTH_BOLD("Smooth bold");
+
+        final String label;
+
+        TextFont(String label) { this.label = label; }
+
+        @Override public String toString() { return label; }
+    }
+
+    @ConfigItem(keyName = "textFont", name = "Font", description = "RuneScape's fonts, as RuneLite's overlays, or a smooth font, which shows its curves with Render text in HD", position = 1, section = textSection)
+    default TextFont textFont() { return TextFont.RUNESCAPE; }
+
+    @Range(min = 8, max = 40)
+    @ConfigItem(keyName = "textSize", name = "Size", description = "Text size; 16 is RuneLite's", position = 2, section = textSection)
+    default int textSize() { return 16; }
+
+    enum TextEdge
+    {
+        SHADOW("Shadow"), OUTLINE("Outline"), NONE("None");
+
+        final String label;
+
+        TextEdge(String label) { this.label = label; }
+
+        @Override public String toString() { return label; }
+    }
+
+    @ConfigItem(keyName = "textEdge", name = "Edge", description = "A shadow down and right of the text, as RuneLite's, an outline all around it, or none", position = 3, section = textSection)
+    default TextEdge textEdge() { return TextEdge.SHADOW; }
+
+    @Alpha
+    @ConfigItem(keyName = "textEdgeColor", name = "Edge color", description = "Color of the shadow or outline", position = 4, section = textSection)
+    default Color textEdgeColor() { return Color.BLACK; }
 
     // Tile markers
 

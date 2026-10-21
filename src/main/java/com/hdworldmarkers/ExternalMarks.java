@@ -220,6 +220,7 @@ final class ExternalMarks
                     // No border and no fill: only the label, drawn as a tile's.
                     Marker m = new Marker("ext:" + owner.getKey() + ":text:" + n++, at.point, at.plane, 1, 1, color, null, 0, (String) text);
                     m.lift = number(t.get("height"), at.lift);
+                    m.follow = at.actor;
                     m.layer = Marker.EXTERNAL;
                     if (m.plane == plane || at.follows) { markerOut.add(m); }
                 }
@@ -386,19 +387,15 @@ final class ExternalMarks
             {
                 int lift = number(p.get("height"), at.lift);
                 String key = "ext:" + owner + ":pie:" + n++;
-                if (fill != null && progress > 0) { out.add(round(key, at.point, at.plane, lift, radius, progress, null, fill, 0)); }
-                if (border != null)
-                {
-                    out.add(round(key + ":ring", at.point, at.plane, lift, radius, 1, border, null, number(p.get("width"), 1)));
-                }
+                if (fill != null && progress > 0) { out.add(round(key, at, lift, radius, progress, null, fill, 0)); }
+                if (border != null) { out.add(round(key + ":ring", at, lift, radius, 1, border, null, number(p.get("width"), 1))); }
             }
         }
         return out;
     }
 
     /** A circle, or with part below 1 a pie's filled part from its centre: clockwise from the top, as on the screen. */
-    private static Marker round(String key, LocalPoint at, int plane, int lift, float radius, double part, Color color, Color fill,
-        double width)
+    private static Marker round(String key, Place at, int lift, float radius, double part, Color color, Color fill, double width)
     {
         boolean whole = part >= 1;
         int steps = whole ? ROUND : Math.max(1, (int) Math.ceil(part * ROUND)), n = whole ? ROUND : steps + 2;
@@ -410,8 +407,8 @@ final class ExternalMarks
             x[j] = (float) (Math.sin(angle) * radius);
             y[j] = (float) (-Math.cos(angle) * radius);
         }
-        Marker m = new Marker(key, at, plane, 1, 1, color, fill, width, null);
-        m.offX = x; m.offY = y; m.lift = lift; m.layer = Marker.PIE;
+        Marker m = new Marker(key, at.point, at.plane, 1, 1, color, fill, width, null);
+        m.offX = x; m.offY = y; m.lift = lift; m.follow = at.actor; m.layer = Marker.PIE;
         return m;
     }
 
@@ -503,7 +500,11 @@ final class ExternalMarks
         final int plane, lift;
         final boolean follows;
 
-        Place(LocalPoint point, int plane, int lift, boolean follows) { this.point = point; this.plane = plane; this.lift = lift; this.follows = follows; }
+        /** The character it follows (Marker.follow), else null. */
+        final Actor actor;
+
+        Place(LocalPoint point, int plane, int lift, Actor actor)
+        { this.point = point; this.plane = plane; this.lift = lift; this.follows = actor != null; this.actor = actor; }
     }
 
     /**
@@ -517,7 +518,7 @@ final class ExternalMarks
         {
             Actor a = actor(wv, t);
             LocalPoint local = a == null ? null : a.getLocalLocation();
-            if (local != null) { out.add(new Place(local, a.getWorldView().getPlane(), a.getLogicalHeight() + 40, true)); }
+            if (local != null) { out.add(new Place(local, a.getWorldView().getPlane(), a.getLogicalHeight() + 40, a)); }
             return out;
         }
         WorldPoint point = point(t);
@@ -525,7 +526,7 @@ final class ExternalMarks
         for (WorldPoint place : places(wv, point))
         {
             LocalPoint local = LocalPoint.fromWorld(wv, place);
-            if (local != null) { out.add(new Place(local, place.getPlane(), 0, false)); }
+            if (local != null) { out.add(new Place(local, place.getPlane(), 0, null)); }
         }
         return out;
     }

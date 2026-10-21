@@ -35,6 +35,7 @@ final class Marker
     /** Border width in screen pixels. */
     final float borderWidth;
     final String label;
+    private String labelKey;
     /** Path Marker dot style: a small circle at the tile center instead of the tile. */
     boolean dot;
     /** Depth layer: overlapping shapes of higher layers are drawn in front, without z-fighting. */
@@ -48,6 +49,19 @@ final class Marker
     float[] offX, offY;
     /** How far above the ground the shape hangs, in local units. */
     int lift;
+    /**
+     * The character it follows (another plugin's text or pie above a head), or null: then it stands where the character
+     * is as the frame is drawn, as hulls and outlines do. Its point is where it was at the last client tick, and text
+     * that moved only then shook against a walking character's head.
+     */
+    net.runelite.api.Actor follow;
+
+    /** Where it stands now: its character's place, else its point. */
+    LocalPoint at()
+    {
+        LocalPoint now = follow == null ? null : follow.getLocalLocation();
+        return now != null ? now : point;
+    }
     /**
      * A line along one side of the tile instead of the footprint, in the border's width and colour: the side's index in
      * HdWorldMarkersConfig.Edge (west, east, south, north); -1 for no line.
@@ -73,5 +87,12 @@ final class Marker
         this.fill = fill == null ? NO_FILL : fill;
         this.borderWidth = (float) Math.max(0, Math.min(16, borderWidth));
         this.label = label;
+    }
+
+    /** The key of the label's shapes in the scene (Render text in HD). */
+    String labelKey()
+    {
+        if (labelKey == null) { labelKey = key + SceneShapeRenderer.LABEL_KEY; }
+        return labelKey;
     }
 }

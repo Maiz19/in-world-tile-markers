@@ -213,6 +213,11 @@ public class HdWorldMarkersPlugin extends Plugin
             // The hovered tile last: shapes of one tile are drawn in the order they are added, so it lies over the
             // tiles under it with its own opacity.
             if (hover != null) { renderer.tile(hover); }
+            if (config.hdText())
+            {
+                SceneText.Style style = textStyle();
+                for (Marker m : sceneMarkers) { if (m.label != null && !m.label.isEmpty()) { renderer.label(m, style); } }
+            }
             for (int i = 0; i < Math.min(MAX_MODELS, modelTargets.size()); i++) { renderer.model(modelTargets.get(i)); }
             boolean ok = renderer.end();
             sceneUnavailable = !ok;
@@ -475,6 +480,7 @@ public class HdWorldMarkersPlugin extends Plugin
         // The settings are read every tick or frame: no rebuild (dragging a colour picker sent one per step), only
         // another try after a failure.
         failedUntil = 0;
+        if (key.startsWith("text")) { textStyle = null; }
         if (key.startsWith(MarkerSources.TILES) || key.startsWith(MarkerSources.LINES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
         else if (MarkerSources.npcKey(key)) { npcsChanged = true; }
     }
@@ -517,6 +523,16 @@ public class HdWorldMarkersPlugin extends Plugin
     Marker hover() { return !client.isGpu() || failed() ? sources.hover() : hover; }
 
     /** The scene route works: GPU on, no rendering error, carrier models available. */
+    /** The Text section's options, read again after they change. */
+    private volatile SceneText.Style textStyle;
+
+    SceneText.Style textStyle()
+    {
+        SceneText.Style style = textStyle;
+        if (style == null) { textStyle = style = SceneText.Style.of(config); }
+        return style;
+    }
+
     boolean sceneActive() { return client.isGpu() && !failed() && !sceneUnavailable; }
 
     private boolean failed() { return System.currentTimeMillis() < failedUntil; }

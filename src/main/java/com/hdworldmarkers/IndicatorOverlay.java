@@ -67,6 +67,7 @@ final class IndicatorOverlay extends Overlay
             // Higher layers last, so your own tile and destination end up on top in 2D too.
             // Only 2D tiles need the layer order; in the scene only labels are drawn here.
             java.util.List<Marker> ordered = plugin.tilesIn2d() ? plugin.markersByLayer() : plugin.markers();
+            SceneText.Style style = null;
             for (Marker m : ordered)
             {
                 if (!(scene && plugin.drawn(m.key)))
@@ -74,18 +75,35 @@ final class IndicatorOverlay extends Overlay
                     Shape shape = m.dot || m.offX != null ? facing(m) : m.edge >= 0 ? line(m) : m.path != null ? path(m) : m.area != null ? area(m) : polygon(m);
                     if (shape != null) { draw(g, shape, m); }
                 }
-                if (m.label != null && !m.label.isEmpty())
+                if (m.label != null && !m.label.isEmpty() && !(scene && plugin.drawn(m.labelKey())))
                 {
                     // Text is slow to measure and draw: labels of tiles off screen (Tile Packs have many) are left out.
                     // At its height: another plugin's text can hang above a character (Marker.lift).
-                    Point at = Perspective.localToCanvas(client, m.point, m.plane, m.lift);
-                    Point p = at == null || !onScreen(at) ? null : Perspective.getCanvasTextLocation(client, g, m.point, m.label, m.lift);
-                    if (p != null) { OverlayUtil.renderTextLocation(g, p, m.label, m.color); }
+                    net.runelite.api.coords.LocalPoint point = m.at();
+                    Point at = Perspective.localToCanvas(client, point, m.plane, m.lift);
+                    if (at == null || !onScreen(at)) { continue; }
+                    if (style == null) { style = plugin.textStyle(); g.setFont(style.font); }
+                    Point p = Perspective.getCanvasTextLocation(client, g, point, m.label, m.lift);
+                    if (p != null) { text(g, p.getX(), p.getY(), m.label, m.color, style); }
                 }
             }
         }
         finally { g.dispose(); }
         return null;
+    }
+
+    /** A label in the Text section's style: its edge (a shadow or RuneLite's four-way outline), then the text opaque, as OverlayUtil.renderTextLocation. */
+    private static void text(Graphics2D g, int x, int y, String text, Color color, SceneText.Style style)
+    {
+        int w = style.edgeWidth;
+        g.setColor(style.edgeColor);
+        if (style.edge == HdWorldMarkersConfig.TextEdge.SHADOW) { g.drawString(text, x + w, y + w); }
+        else if (style.edge == HdWorldMarkersConfig.TextEdge.OUTLINE)
+        {
+            g.drawString(text, x + w, y); g.drawString(text, x - w, y); g.drawString(text, x, y + w); g.drawString(text, x, y - w);
+        }
+        g.setColor(new Color(color.getRGB() & 0xffffff));
+        g.drawString(text, x, y);
     }
 
     private static void draw(Graphics2D g, Shape shape, Marker m)
@@ -123,7 +141,8 @@ final class IndicatorOverlay extends Overlay
      */
     private Shape facing(Marker m)
     {
-        Point p = Perspective.localToCanvas(client, m.point, m.plane, m.lift);
+        net.runelite.api.coords.LocalPoint point = m.at();
+        Point p = Perspective.localToCanvas(client, point, m.plane, m.lift);
         if (p == null) { return null; }
         float[] ox = m.offX != null ? m.offX : SceneShapeRenderer.DOT_X, oy = m.offX != null ? m.offY : SceneShapeRenderer.DOT_Y;
         float scale = 1;
@@ -131,7 +150,7 @@ final class IndicatorOverlay extends Overlay
         {
             float[] q = new float[3];
             ModelShapes.Camera camera = ModelShapes.Camera.of(client);
-            camera.project(m.point.getX(), m.point.getY(), Perspective.getTileHeight(client, m.point, m.plane) - m.lift, q);
+            camera.project(point.getX(), point.getY(), Perspective.getTileHeight(client, point, m.plane) - m.lift, q);
             if (!(q[2] > 0)) { return null; }
             scale = camera.scale / q[2];
         }

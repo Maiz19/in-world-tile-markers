@@ -64,7 +64,13 @@ final class OutlinePaint
         flat.append(curves, false);
         Area painted = new Area(flat);
         painted.subtract(new Area(silhouette));
-        List<double[]> rings = rings(painted);
+        return fill(painted);
+    }
+
+    /** A region (an Area of straight pieces) as triangles; null for an empty one. */
+    static Mesh fill(Area region)
+    {
+        List<double[]> rings = rings(region);
         if (rings.isEmpty()) { return null; }
         // A ring inside an odd number of others is a hole, and goes with the smallest ring around it; the others are
         // outer rings.

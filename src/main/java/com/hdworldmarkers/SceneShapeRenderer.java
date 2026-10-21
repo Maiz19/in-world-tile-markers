@@ -260,6 +260,24 @@ final class SceneShapeRenderer
      * and under it in the next.
      */
     static final int CLICKBOX_LAYER = 14, HULL_LAYER = 15, OUTLINE_LAYER = 16;
+    /**
+     * Labels in the scene (Render text in HD), over every mark as RuneLite's 2D text, their shadow under them. Above
+     * XRAY_TOP_LAYER: through walls they lie a few units nearer than the top marks, still beyond 117 HD's near clip.
+     */
+    static final int LABEL_SHADOW_LAYER = 21, LABEL_LAYER = 22;
+    /** Appended to a marker's key for its label. */
+    static final String LABEL_KEY = "\u0000label";
+    /** Without through walls a label stands this much nearer than its tile, so the character on the tile is not in front of it. */
+    private static final float LABEL_NEARER = 128;
+    private final SceneText text = new SceneText();
+    /**
+     * While a label is drawn: its point in the world {x, y, height} and where it projects {x, y}. Its vertices keep
+     * their place from that point in canvas pixels, and follow the camera the client draws with (Bucket.billboards),
+     * as RuneLite's 2D text: fixed in the world they were a board facing the frame's camera, which leaned as the camera
+     * turned and lagged behind it.
+     */
+    private final float[] billboard = new float[5];
+    private boolean billboarding;
 
     @Inject
     SceneShapeRenderer(Client client, CarrierModels carriers) { this.client = client; this.carriers = carriers; }
@@ -273,6 +291,7 @@ final class SceneShapeRenderer
     void begin(ModelShapes.Camera camera, float canvasPerPixel, LocalPoint xrayAnchor, int xrayLevel)
     {
         this.xray = xrayAnchor != null;
+        billboarding = false;
         this.xrayAnchor = xrayAnchor;
         this.xrayLevel = xrayLevel;
         this.camera = camera;
@@ -301,10 +320,10 @@ final class SceneShapeRenderer
     boolean tile(Marker m)
     {
         WorldView wv = client.getTopLevelWorldView();
-        if (unavailable || m.point.getWorldView() != wv.getId()) { return false; }
+        LocalPoint at = m.at();
+        if (unavailable || at.getWorldView() != wv.getId()) { return false; }
         if ((m.borderWidth <= 0 || m.color.getAlpha() == 0) && m.fill.getAlpha() == 0) { return culled(m.key); }
         layer = m.layer;
-        LocalPoint at = m.point;
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
         int height = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
         if (m.dot || m.offX != null) { return facing(m, at, level, height); }
@@ -453,6 +472,54 @@ final class SceneShapeRenderer
         float scale = m.offX != null ? camera.scale / point[2] : pixel;
         for (int i = 0; i < n; i++) { px[i] = point[0] + ox[i] * scale; py[i] = point[1] + oy[i] * scale; pd[i] = point[2]; }
         return shape(m, at, level, outline.buildPolygon(px, py, pd, n, width(m.borderWidth), false), m.fill);
+    }
+
+    /**
+     * A marker's label in the scene (Render text in HD): its glyphs where RuneLite's text goes, centred over the point
+     * at its height, with the style's shadow or outline under them. Returns whether it is in the scene this frame.
+     */
+    boolean label(Marker m, SceneText.Style style)
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        LocalPoint at = m.at();
+        if (unavailable || at.getWorldView() != wv.getId()) { return false; }
+        int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
+        // On the ground at its point, as RuneLite places text over a character (Actor.getCanvasTextLocation).
+        int ground = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
+        camera.project(at.getX(), at.getY(), ground - m.lift, point);
+        if (!(point[2] >= PARTIAL_NEAR)) { return false; }
+        billboard[0] = at.getX(); billboard[1] = at.getY(); billboard[2] = ground - m.lift;
+        float x = point[0], y = point[1], depth = labelDepth(point[2]);
+        billboard[3] = x; billboard[4] = y;
+        String key = m.labelKey();
+        // RuneLite draws a label's text opaque whatever the colour's alpha (OverlayUtil.renderTextLocation).
+        Color color = new Color(m.color.getRGB() & 0xffffff);
+        boolean any = false;
+        List<SceneText.Glyph> glyphs = text.glyphs(m.label, style);
+        billboarding = true;
+        // The edge (shadow or outline) first, a layer under the text; it leaves the text out (SceneText.Glyph).
+        for (int pass = 0; pass < 2; pass++)
+        {
+            layer = pass == 0 ? LABEL_SHADOW_LAYER : LABEL_LAYER;
+            for (SceneText.Glyph glyph : glyphs)
+            {
+                OutlinePaint.Mesh mesh = pass == 0 ? glyph.edge : glyph.fill;
+                if (mesh == null || !outline.buildMesh(mesh.xy, mesh.tris, depth, x, y)) { continue; }
+                if (offscreen()) { any |= culled(key); continue; }
+                any |= draw(key, at, level, pass == 0 ? style.edgeColor : color, Marker.NO_FILL, true);
+            }
+        }
+        billboarding = false;
+        return any;
+    }
+
+    /** A label's depth from that of its point: through walls as is (pulled to the camera when drawn), else a tile nearer. */
+    private float labelDepth(float pointDepth) { return xray ? pointDepth : Math.max(PARTIAL_NEAR, pointDepth - LABEL_NEARER); }
+
+    /** Of a point at this depth, how near the camera it is drawn: above the ground, later layers nearer, a white layer nearer still (see place). */
+    private static float nearer(float d, int layer, boolean white)
+    {
+        return d - Math.max(4, d * 0.01f) - Math.max(1, d * layer * 0.001f) - (white ? Math.max(0.5f, d * 0.0005f) : 0);
     }
 
     private int sample(WorldView wv, int level, int x, int y, int k)
@@ -801,8 +868,8 @@ final class SceneShapeRenderer
         // Shapes beyond the loaded area hang on the nearest edge tile; the client only places objects inside it.
         int tileX = Math.max(0, Math.min(top.getSizeX() - 1, anchor.getX() >> 7));
         int tileY = Math.max(0, Math.min(top.getSizeY() - 1, anchor.getY() >> 7));
-        // Floating marks under 117 HD stay under its shadow threshold.
-        int cap = xray ? floatingAlphaCap : 255;
+        // Floating marks under 117 HD stay under its shadow threshold; labels stand up from the ground too.
+        int cap = xray || layer >= LABEL_SHADOW_LAYER ? floatingAlphaCap : 255;
         // The cap applies to the colour as a whole, before it is split into layers that blend to it.
         layers(border, Math.min(cap, hasBorder ? border.getAlpha() : 0), borderLayers);
         layers(fill, Math.min(cap, fill.getAlpha()), fillLayers);
@@ -823,7 +890,8 @@ final class SceneShapeRenderer
         st.xray = xray;
         st.shared = shared;
         st.begin(layer, key);
-        shapeCut = xray ? cutCosts(key) : null;
+        // Labels stay whole over the actors, as RuneLite's text (see Bucket's cutter).
+        shapeCut = xray && layer < LABEL_SHADOW_LAYER ? cutCosts(key) : null;
         append(st, layer, borderHsl, borderAlpha, fillHsl, fillAlpha);
         if (white)
         {
@@ -870,11 +938,10 @@ final class SceneShapeRenderer
     private void place(boolean throughWalls, boolean white)
     {
         if (tx.length < outline.vertices) { tx = new float[outline.vertices * 2]; ty = new float[outline.vertices * 2]; tz = new float[outline.vertices * 2]; }
-        float layerBias = layer * 0.001f;
         for (int i = 0; i < outline.vertices; i++)
         {
             float d = outline.depth[i];
-            float at = throughWalls ? d : d - Math.max(4, d * 0.01f) - Math.max(1, d * layerBias) - (white ? Math.max(0.5f, d * 0.0005f) : 0);
+            float at = throughWalls ? d : nearer(d, layer, white);
             camera.unproject(outline.x[i], outline.y[i], at, point);
             tx[i] = point[0]; ty[i] = point[1]; tz[i] = point[2];
         }
@@ -888,6 +955,9 @@ final class SceneShapeRenderer
         {
             b.layer[first + i] = vertexLayer;
             b.wx[first + i] = tx[i]; b.wy[first + i] = ty[i]; b.wz[first + i] = tz[i];
+            b.ox[first + i] = billboarding ? outline.x[i] - billboard[3] : Float.NaN;
+            b.oy[first + i] = outline.y[i] - billboard[4];
+            b.ax[first + i] = billboard[0]; b.ay[first + i] = billboard[1]; b.az[first + i] = billboard[2];
         }
         b.vertices += outline.vertices;
         for (int f = 0; f < outline.faces; f++)
@@ -1225,6 +1295,9 @@ final class SceneShapeRenderer
             int shift = b.vertices - firstVertex;
             System.arraycopy(st.wx, firstVertex, b.wx, b.vertices, nv); System.arraycopy(st.wy, firstVertex, b.wy, b.vertices, nv);
             System.arraycopy(st.wz, firstVertex, b.wz, b.vertices, nv); System.arraycopy(st.layer, firstVertex, b.layer, b.vertices, nv);
+            System.arraycopy(st.ox, firstVertex, b.ox, b.vertices, nv); System.arraycopy(st.oy, firstVertex, b.oy, b.vertices, nv);
+            System.arraycopy(st.ax, firstVertex, b.ax, b.vertices, nv); System.arraycopy(st.ay, firstVertex, b.ay, b.vertices, nv);
+            System.arraycopy(st.az, firstVertex, b.az, b.vertices, nv);
             for (int f = firstFace; f < firstFace + nf; f++)
             {
                 int to = b.faces++;
@@ -1241,6 +1314,7 @@ final class SceneShapeRenderer
     {
         int i = b.vertices++;
         b.wx[i] = st.wx[v]; b.wy[i] = st.wy[v]; b.wz[i] = st.wz[v]; b.layer[i] = st.layer[v];
+        b.ox[i] = st.ox[v]; b.oy[i] = st.oy[v]; b.ax[i] = st.ax[v]; b.ay[i] = st.ay[v]; b.az[i] = st.az[v];
         return i;
     }
 
@@ -1329,6 +1403,8 @@ final class SceneShapeRenderer
         }
         else
         {
+            // Labels follow the camera the client draws with (Bucket.billboards): it reads the frozen copy.
+            b.freeze(anchorX, anchorY, anchorZ, Collections.emptyList());
             // Unused vertices at the origin, inside the fixed bounds.
             float[] vx = m.getVerticesX(), vy = m.getVerticesY(), vz = m.getVerticesZ();
             for (int i = b.vertices; i < b.usedVertices; i++) { vx[i] = 0; vy[i] = 0; vz[i] = 0; }
@@ -1499,6 +1575,8 @@ final class SceneShapeRenderer
     {
         final int tileX, tileY, level, worldView;
         float[] wx = new float[64], wy = new float[64], wz = new float[64], layer = new float[64];
+        /** Per vertex of a label, its place in canvas pixels from where its point {ax, ay, az} projects; ox NaN for others. */
+        float[] ox = new float[64], oy = new float[64], ax = new float[64], ay = new float[64], az = new float[64];
         int[] fa = new int[96], fb = new int[96], fc = new int[96], color = new int[96], alpha = new int[96];
         int vertices, faces;
         boolean xray, shared;
@@ -1513,6 +1591,7 @@ final class SceneShapeRenderer
                 int n = vertexCount * 2;
                 wx = Arrays.copyOf(wx, n); wy = Arrays.copyOf(wy, n); wz = Arrays.copyOf(wz, n);
                 layer = Arrays.copyOf(layer, n);
+                ox = Arrays.copyOf(ox, n); oy = Arrays.copyOf(oy, n); ax = Arrays.copyOf(ax, n); ay = Arrays.copyOf(ay, n); az = Arrays.copyOf(az, n);
             }
             if (fa.length < faceCount)
             {
@@ -1602,6 +1681,9 @@ final class SceneShapeRenderer
         private Model frozenModel;
         private float[] fx = new float[0], fy = fx, fz = fx;
         private float[] fl = new float[0];
+        private float[] fox = fl, foy = fl, fax = fl, fay = fl, faz = fl;
+        /** It holds a label, whose vertices follow the camera the client draws with (billboards). */
+        private boolean labels;
         private int frozenVertices, fAnchorX, fAnchorY, fAnchorZ;
         /** The faces written with them (vertex indices, colour, alpha), and the actors whose silhouettes they leave out. */
         private int[] ffa = new int[0], ffb = ffa, ffc = ffa, fColor = ffa, fAlpha = ffa;
@@ -1609,6 +1691,8 @@ final class SceneShapeRenderer
         private List<PlayerSilhouette> frozenCuts = Collections.emptyList();
         /** Scratch for cut: the geometry as seen from a camera, cut around the player; points on the canvas, layers. */
         private final ScreenOutline cutter = new ScreenOutline();
+        // Labels are not cut around the actors: RuneLite's text lies over them.
+        { cutter.whole = f -> fl[ffa[f]] >= LABEL_SHADOW_LAYER; }
         private float[] sx = new float[0], sy = sx, sd = sx, sl = sx;
         /** The camera of the last pull in getModel; null after freeze (a new frame), so the next call pulls. */
         private ModelShapes.Camera pulled;
@@ -1629,6 +1713,11 @@ final class SceneShapeRenderer
             if (fx.length < vertices) { fx = new float[wx.length]; fy = new float[wx.length]; fz = new float[wx.length]; fl = new float[wx.length]; }
             System.arraycopy(wx, 0, fx, 0, vertices); System.arraycopy(wy, 0, fy, 0, vertices);
             System.arraycopy(wz, 0, fz, 0, vertices); System.arraycopy(layer, 0, fl, 0, vertices);
+            if (fox.length < vertices) { fox = new float[wx.length]; foy = new float[wx.length]; fax = new float[wx.length]; fay = new float[wx.length]; faz = new float[wx.length]; }
+            System.arraycopy(ox, 0, fox, 0, vertices); System.arraycopy(oy, 0, foy, 0, vertices);
+            System.arraycopy(ax, 0, fax, 0, vertices); System.arraycopy(ay, 0, fay, 0, vertices); System.arraycopy(az, 0, faz, 0, vertices);
+            labels = false;
+            for (int i = 0; i < vertices && !labels; i++) { labels = !Float.isNaN(ox[i]); }
             if (ffa.length < faces) { ffa = new int[fa.length]; ffb = new int[fa.length]; ffc = new int[fa.length]; fColor = new int[fa.length]; fAlpha = new int[fa.length]; }
             System.arraycopy(fa, 0, ffa, 0, faces); System.arraycopy(fb, 0, ffb, 0, faces); System.arraycopy(fc, 0, ffc, 0, faces);
             System.arraycopy(color, 0, fColor, 0, faces); System.arraycopy(alpha, 0, fAlpha, 0, faces);
@@ -1651,7 +1740,13 @@ final class SceneShapeRenderer
             int n = frozenVertices;
             if (sx.length < n) { sx = new float[n * 2]; sy = new float[n * 2]; sd = new float[n * 2]; }
             float[] q = pullPoint;
-            for (int i = 0; i < n; i++) { cam.project(fx[i], fy[i], fz[i], q); sx[i] = q[0]; sy[i] = q[1]; sd[i] = q[2]; }
+            for (int i = 0; i < n; i++)
+            {
+                // A label's vertex: its place from where the label's point projects now (see billboards).
+                if (Float.isNaN(fox[i])) { cam.project(fx[i], fy[i], fz[i], q); sx[i] = q[0]; sy[i] = q[1]; }
+                else { cam.project(fax[i], fay[i], faz[i], q); sx[i] = q[0] + fox[i]; sy[i] = q[1] + foy[i]; }
+                sd[i] = q[2];
+            }
             ScreenOutline o = cutter;
             o.load(sx, sy, sd, n, ffa, ffb, ffc, frozenFaces);
             for (PlayerSilhouette s : frozenCuts)
@@ -1681,7 +1776,7 @@ final class SceneShapeRenderer
                 float bias = sl[i] * 0.25f;
                 // The floor keeps the layer order (and the white layer in front) where the depth is clamped.
                 float floor = XRAY_MIN_DEPTH + XRAY_LAYER_SPAN - bias;
-                float rank = Math.max(0, Math.min(XRAY_TOP_LAYER, sl[i]));
+                float rank = Math.max(0, Math.min(LABEL_LAYER + 0.5f, sl[i]));
                 float at;
                 if (planes) { at = Math.max(floor, top + (XRAY_TOP_LAYER - rank) * step); }
                 else
@@ -1703,6 +1798,29 @@ final class SceneShapeRenderer
                 for (int i = o.vertices; i < m.getVerticesCount(); i++) { vx[i] = vx[0]; vy[i] = vy[0]; vz[i] = vz[0]; }
             }
             writeFaces(m, o.faces, o.a, o.b, o.c, o.source, fColor, fAlpha);
+        }
+
+        /**
+         * Not through walls: places the labels' vertices by where their point projects with this camera, at their
+         * canvas places from it, as label drew them (its depth, layer and white layer as place), so they face this camera.
+         */
+        synchronized void billboards(ModelShapes.Camera cam)
+        {
+            Model m = frozenModel;
+            if (m == null || frozenVertices > m.getVerticesCount()) { return; }
+            float[] vx = m.getVerticesX(), vy = m.getVerticesY(), vz = m.getVerticesZ();
+            float[] q = pullPoint, p = pullGround;
+            for (int i = 0; i < frozenVertices; i++)
+            {
+                if (Float.isNaN(fox[i])) { continue; }
+                cam.project(fax[i], fay[i], faz[i], q);
+                if (!(q[2] >= PARTIAL_NEAR)) { continue; }
+                float d = Math.max(PARTIAL_NEAR, q[2] - LABEL_NEARER), l = fl[i];
+                cam.unproject(q[0] + fox[i], q[1] + foy[i], nearer(d, (int) l, l != (int) l), p);
+                vx[i] = p[0] - fAnchorX;
+                vy[i] = p[2] - fAnchorZ;
+                vz[i] = p[1] - fAnchorY;
+            }
         }
 
         /** Writes nf faces (vertex indices, with the colour and alpha of their source face or their own) and hides the rest. */
@@ -1811,9 +1929,9 @@ final class SceneShapeRenderer
             // follow the camera the renderer is drawing with right now.
             // The renderer may ask several times per frame (117 HD: shadows, scene): pull again only when the camera
             // moved or the frame was rewritten since the last pull.
-            if (xray && !pulledWith(now))
+            if ((xray || labels) && !pulledWith(now))
             {
-                pullToCamera(now);
+                if (xray) { pullToCamera(now); } else { billboards(now); }
                 FlatModel.bounds(model);
             }
             return model;

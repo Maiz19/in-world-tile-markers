@@ -53,7 +53,10 @@ final class ScreenOutline
      * Ready triangles (OutlinePaint) over points {x0, y0, ...}, all at one depth: every face counts as border, drawn in
      * the border's colour.
      */
-    boolean buildMesh(float[] xy, int[] tris, float d)
+    boolean buildMesh(float[] xy, int[] tris, float d) { return buildMesh(xy, tris, d, 0, 0); }
+
+    /** As buildMesh, its points moved by (dx, dy). */
+    boolean buildMesh(float[] xy, int[] tris, float d, float dx, float dy)
     {
         int n = xy.length / 2, count = tris.length / 3;
         if (n < 3 || count == 0) { return false; }
@@ -63,7 +66,7 @@ final class ScreenOutline
         maxX = maxY = -Float.MAX_VALUE;
         for (int i = 0; i < n; i++)
         {
-            x[i] = xy[i * 2]; y[i] = xy[i * 2 + 1]; depth[i] = d;
+            x[i] = xy[i * 2] + dx; y[i] = xy[i * 2 + 1] + dy; depth[i] = d;
             minX = Math.min(minX, x[i]); maxX = Math.max(maxX, x[i]); minY = Math.min(minY, y[i]); maxY = Math.max(maxY, y[i]);
         }
         int f = 0;
@@ -281,6 +284,9 @@ final class ScreenOutline
      * points, or leave fewer than maxFaces faces for the faces after it, stays whole. Returns whether the box meets the
      * geometry at all.
      */
+    /** Faces (by their face before cutOut) that cuts leave whole, or null for none. */
+    java.util.function.IntPredicate whole;
+
     boolean cutOut(PlayerCut keep, int maxVertices, int maxFaces)
     {
         if (keep.maxX < minX || keep.minX > maxX || keep.maxY < minY || keep.minY > maxY) { return false; }
@@ -298,7 +304,7 @@ final class ScreenOutline
             before[2 * f] = vertices;
             before[2 * f + 1] = faces;
             current = os[f];
-            cut(keep, hx, hy, oa[f], ob[f], oc[f]);
+            if (whole != null && whole.test(current)) { keep(oa[f], ob[f], oc[f]); } else { cut(keep, hx, hy, oa[f], ob[f], oc[f]); }
             if (vertices > maxVertices || faces + oldFaces - 1 - f > maxFaces)
             {
                 vertices = before[2 * f];
