@@ -37,6 +37,12 @@ final class Silhouette
         float[] rowStart = new float[0], rowEnd = new float[0];
         float[] west = new float[64], east = new float[64], top = new float[64], bottom = new float[64];
         int cellCount;
+        /** Per face whether it is thinner than a cell (see widen). */
+        boolean[] thin = new boolean[0];
+        /** Faces with the thin ones widened (see widen), and their vertices: the model's, then five per thin face. */
+        float[] wideX = new float[0], wideY = new float[0];
+        int[] wideA = new int[0], wideB = new int[0], wideC = new int[0];
+        int wideFaces;
         /** Spans between two cell centres (covering neither): line (row or column, negative for columns), start and end. */
         int[] gapLine = new int[64];
         float[] gapLo = new float[64], gapHi = new float[64];
@@ -121,11 +127,27 @@ final class Silhouette
             Arrays.fill(scratch.rowEnd, 0, cells, Float.NEGATIVE_INFINITY);
         }
         scratch.gapCount = 0;
+        // The thin faces widened (see widen).
+        int thin = thin(x, y, a, b, c, faces, hidden, 1 / scale, scratch);
         for (int f = 0; f < faces; f++)
         {
-            if (hidden != null && hidden[f] || unprojected(x, a[f], b[f], c[f])) { continue; }
+            if (hidden != null && hidden[f] || thin > 0 && scratch.thin[f] || unprojected(x, a[f], b[f], c[f])) { continue; }
             fill(grid, words, w, h, (x[a[f]] - ox) * scale, (y[a[f]] - oy) * scale, (x[b[f]] - ox) * scale, (y[b[f]] - oy) * scale,
                 (x[c[f]] - ox) * scale, (y[c[f]] - oy) * scale, scratch, exact);
+        }
+        if (thin > 0)
+        {
+            // From here on the faces and their vertices are in scratch, the thin ones last.
+            int first = widen(x, y, a, b, c, faces, hidden, 1 / scale, scratch);
+            x = scratch.wideX; y = scratch.wideY; a = scratch.wideA; b = scratch.wideB; c = scratch.wideC;
+            faces = scratch.wideFaces;
+            hidden = null;
+            for (int f = first; f < faces; f++)
+            {
+                if (unprojected(x, a[f], b[f], c[f])) { continue; }
+                fill(grid, words, w, h, (x[a[f]] - ox) * scale, (y[a[f]] - oy) * scale, (x[b[f]] - ox) * scale, (y[b[f]] - oy) * scale,
+                    (x[c[f]] - ox) * scale, (y[c[f]] - oy) * scale, scratch, exact);
+            }
         }
         if (mask != null && !exact) { mask.apply(grid, words, w, h, ox, oy, scale); }
         List<int[]> corners = boundaries(grid, words, w, h, scratch);
@@ -305,6 +327,95 @@ final class Silhouette
         int i = find(scratch, cell);
         return i < 0 ? Float.NaN : values[i];
     }
+
+    /** Marks the faces narrower than a cell (canvas units) in scratch.thin; returns how many there are. */
+    private static int thin(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, float cell, Scratch s)
+    {
+        if (s.thin.length < faces) { s.thin = new boolean[faces + faces / 2]; }
+        int thin = 0;
+        for (int f = 0; f < faces; f++)
+        {
+            s.thin[f] = !(hidden != null && hidden[f]) && !unprojected(x, a[f], b[f], c[f]) && width(x, y, a[f], b[f], c[f]) < cell;
+            if (s.thin[f]) { thin++; }
+        }
+        return thin;
+    }
+
+    /**
+     * A face narrower than a cell misses most cell centres along its length: a strand of hair, a pipe or a rope came out
+     * in pieces that came and went as it moved, and its outline flickered along the whole line. A thin face is traced
+     * swept across its longest side, half the width it lacks each way, so it is a cell wide where it was widest and
+     * half that missing width beyond its sides; a band of them (a rope) is a cell wide all along. It changes smoothly:
+     * not at all at a cell's width, the same both ways at none (a face turning through edge-on). Deciding per face
+     * whether to widen made marks jump between two shapes, and a hole open and close. Writes all faces to the wide
+     * arrays of scratch (hidden ones left out), the thin ones last, and their number to wideFaces; returns where the
+     * thin ones start.
+     */
+    private static int widen(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, float cell, Scratch s)
+    {
+        int vertices = 0, thin = 0;
+        for (int f = 0; f < faces; f++)
+        {
+            if (hidden != null && hidden[f] || unprojected(x, a[f], b[f], c[f])) { continue; }
+            vertices = Math.max(vertices, Math.max(a[f], Math.max(b[f], c[f])) + 1);
+            if (s.thin[f]) { thin++; }
+        }
+        int most = vertices + 5 * thin;
+        if (s.wideX.length < most) { s.wideX = new float[most + most / 2]; s.wideY = new float[most + most / 2]; }
+        if (s.wideA.length < faces + 2 * thin) { int n = faces + 2 * thin + (faces + 2 * thin) / 2; s.wideA = new int[n]; s.wideB = new int[n]; s.wideC = new int[n]; }
+        System.arraycopy(x, 0, s.wideX, 0, vertices);
+        System.arraycopy(y, 0, s.wideY, 0, vertices);
+        int n = 0;
+        for (int f = 0; f < faces; f++)
+        {
+            if (hidden != null && hidden[f] || s.thin[f] || unprojected(x, a[f], b[f], c[f])) { continue; }
+            s.wideA[n] = a[f]; s.wideB[n] = b[f]; s.wideC[n] = c[f];
+            n++;
+        }
+        int first = n, next = vertices;
+        for (int f = 0; f < faces; f++)
+        {
+            if (!s.thin[f]) { continue; }
+            int i = a[f], j = b[f], k = c[f];
+            float l0 = len2(x, y, i, j), l1 = len2(x, y, j, k), l2 = len2(x, y, k, i);
+            int p, q, r;
+            if (l0 >= l1 && l0 >= l2) { p = i; q = j; r = k; } else if (l1 >= l2) { p = j; q = k; r = i; } else { p = k; q = i; r = j; }
+            float dx = x[q] - x[p], dy = y[q] - y[p], len = (float) Math.sqrt(dx * dx + dy * dy);
+            if (!(len > 0))
+            {
+                s.wideA[n] = i; s.wideB[n] = j; s.wideC[n] = k;
+                n++;
+                continue;
+            }
+            // Swept across its longest side, half the missing width each way: the corners of that side to either side,
+            // the corner across it further out (towards which the across direction points).
+            float g = (cell - width(x, y, i, j, k)) / 2, nx = -dy / len * g, ny = dx / len * g;
+            if (nx * (x[r] - x[p]) + ny * (y[r] - y[p]) < 0) { nx = -nx; ny = -ny; }
+            int v = next;
+            s.wideX[v] = x[p] - nx; s.wideY[v] = y[p] - ny;
+            s.wideX[v + 1] = x[q] - nx; s.wideY[v + 1] = y[q] - ny;
+            s.wideX[v + 2] = x[q] + nx; s.wideY[v + 2] = y[q] + ny;
+            s.wideX[v + 3] = x[r] + nx; s.wideY[v + 3] = y[r] + ny;
+            s.wideX[v + 4] = x[p] + nx; s.wideY[v + 4] = y[p] + ny;
+            next += 5;
+            s.wideA[n] = v; s.wideB[n] = v + 1; s.wideC[n] = v + 2; n++;
+            s.wideA[n] = v; s.wideB[n] = v + 2; s.wideC[n] = v + 3; n++;
+            s.wideA[n] = v; s.wideB[n] = v + 3; s.wideC[n] = v + 4; n++;
+        }
+        s.wideFaces = n;
+        return first;
+    }
+
+    /** A face's width across its longest side. */
+    private static float width(float[] x, float[] y, int i, int j, int k)
+    {
+        float longest = Math.max(len2(x, y, i, j), Math.max(len2(x, y, j, k), len2(x, y, k, i)));
+        if (!(longest > 0)) { return 0; }
+        float cross = (x[j] - x[i]) * (y[k] - y[i]) - (y[j] - y[i]) * (x[k] - x[i]);
+        return Math.abs(cross) / (float) Math.sqrt(longest);
+    }
+
+    private static float len2(float[] x, float[] y, int i, int j) { float dx = x[j] - x[i], dy = y[j] - y[i]; return dx * dx + dy * dy; }
 
     private static boolean unprojected(float[] x, int i, int j, int k)
     {

@@ -46,7 +46,7 @@ final class IndicatorOverlay extends Overlay
                     if (scene && plugin.drawn(t.key)) { continue; }
                     if (t.outline)
                     {
-                        if (t.npc != null) { outlines.drawOutline(t.npc, (int) t.borderWidth, t.color, 0); }
+                        if (t.actor != null) { outlines.drawOutline(t.actor, (int) t.borderWidth, t.color, 0); }
                         else if (t.object != null)
                         {
                             if (outlined == null) { outlined = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()); }
@@ -77,8 +77,9 @@ final class IndicatorOverlay extends Overlay
                 if (m.label != null && !m.label.isEmpty())
                 {
                     // Text is slow to measure and draw: labels of tiles off screen (Tile Packs have many) are left out.
-                    Point at = Perspective.localToCanvas(client, m.point, m.plane);
-                    Point p = at == null || !onScreen(at) ? null : Perspective.getCanvasTextLocation(client, g, m.point, m.label, 0);
+                    // At its height: another plugin's text can hang above a character (Marker.lift).
+                    Point at = Perspective.localToCanvas(client, m.point, m.plane, m.lift);
+                    Point p = at == null || !onScreen(at) ? null : Perspective.getCanvasTextLocation(client, g, m.point, m.label, m.lift);
                     if (p != null) { OverlayUtil.renderTextLocation(g, p, m.label, m.color); }
                 }
             }

@@ -12,6 +12,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PluginMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.events.ProfileChanged;
+import net.runelite.client.util.Text;
 
 /**
  * Marks sent by other plugins, drawn by HD World Markers like its own. Plugins need no compile-time
@@ -24,14 +25,21 @@ import net.runelite.client.events.ProfileChanged;
  * Markers saves it (its template) or as it is there (getWorldLocation)), {@code color}, optional {@code fill}
  * (Color or ARGB int), {@code width} (border pixels, default 2), {@code size} (tiles, default 1)
  * and {@code label}. Replaces all tiles of that owner.</li>
- * <li>{@code npcs}: {@code owner} and {@code npcs}, a list of maps with {@code npc} (NPC) or
- * {@code index} (NPC index), {@code style} ({@code hull}, {@code outline}, {@code clickbox},
- * {@code tile} or {@code truetile}, default hull), {@code color}, optional {@code fill} and
- * {@code width}. Replaces all NPC marks of that owner.</li>
+ * <li>{@code npcs}, {@code players}, {@code objects}, {@code items}: {@code owner} and a list of that name, of maps
+ * with what to highlight ({@code npc} (NPC) or {@code index}; {@code player} (Player) or {@code name}; {@code object}
+ * (TileObject) or {@code point} and {@code id}; {@code point} and {@code id} of a ground item), {@code style} or
+ * {@code styles} (a list) of {@code outline}, {@code hull}, {@code clickbox}, {@code tile}, {@code truetile},
+ * {@code swtile} and {@code swtruetile} (default hull), {@code color}, optional {@code fill} and {@code width}, drawn as
+ * Interact highlight draws them (Highlights). Each replaces all marks of that owner of its kind.</li>
  * <li>{@code pies}: {@code owner} and {@code pies}, a list of maps with {@code point} (as tiles), {@code color} (the
  * filled part), optional {@code border} (its ring) and {@code width}, {@code progress} (0 to 1) or {@code start} and
  * {@code end} (System.currentTimeMillis times: filled from start to end), {@code size} (diameter in local units, 128
- * a tile; default 64) and {@code height} (local units above the ground). Replaces all pies of that owner.</li>
+ * a tile; default 64) and {@code height} (local units above the ground). Instead of a point a pie can follow an NPC
+ * or player ({@code npc} or {@code index}, {@code player} or {@code name}), by default at the top of its model.
+ * Replaces all pies of that owner.</li>
+ * <li>{@code texts}: {@code owner} and {@code texts}, a list of maps with {@code text}, {@code color} and where (a
+ * point, or an NPC or player as for pies), optional {@code height}. Text on its own, as a tile's label. Replaces all
+ * texts of that owner.</li>
  * <li>{@code lines}: {@code owner} and {@code lines}, a list of maps with {@code points} (a list of points as tiles:
  * WorldPoint, or maps with {@code x}, {@code y}, {@code plane}), {@code color} and {@code width} (border pixels, default
  * 2). A line on the ground through the tiles' centres, as a path: points next to each other (diagonals too) are
@@ -51,8 +59,11 @@ final class ExternalMarks
     static final int MAX_PER_OWNER = 1000;
 
     private final Client client;
-    private final Map<String, List<Map<String, Object>>> tiles = new ConcurrentHashMap<>(), npcs = new ConcurrentHashMap<>(),
-        pies = new ConcurrentHashMap<>(), lines = new ConcurrentHashMap<>();
+    private final Map<String, List<Map<String, Object>>> tiles = new ConcurrentHashMap<>(), pies = new ConcurrentHashMap<>(),
+        lines = new ConcurrentHashMap<>(), texts = new ConcurrentHashMap<>();
+    /** Per kind of highlight (npcs, players, objects, items), each owner's list. */
+    private final Map<String, Map<String, List<Map<String, Object>>>> highlights = new ConcurrentHashMap<>();
+    private static final List<String> HIGHLIGHTS = Arrays.asList("npcs", "players", "objects", "items");
     /**
      * Each owner's tiles and pies as markers for the scene they were made for, made again after new marks or a scene load:
      * every tick they were made anew (an instance's tiles searched its template chunks for each). Pies that fill by the
@@ -80,7 +91,7 @@ final class ExternalMarks
     @Inject
     ExternalMarks(Client client) { this.client = client; }
 
-    void clear() { tiles.clear(); npcs.clear(); pies.clear(); lines.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
+    void clear() { tiles.clear(); highlights.clear(); pies.clear(); lines.clear(); texts.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
 
     @Subscribe
     public void onProfileChanged(ProfileChanged event) { clear(); }
@@ -106,11 +117,15 @@ final class ExternalMarks
         switch (message.getName())
         {
             case "tiles": tiles.put((String) owner, entries(message.getData().get("tiles"))); tileMarkers.remove(owner); break;
-            case "npcs": npcs.put((String) owner, entries(message.getData().get("npcs"))); break;
+            case "npcs": case "players": case "objects": case "items":
+                highlights.computeIfAbsent(message.getName(), k -> new ConcurrentHashMap<>()).put((String) owner, entries(message.getData().get(message.getName())));
+                break;
             case "pies": pies.put((String) owner, entries(message.getData().get("pies"))); pieMarkers.remove(owner); break;
+            case "texts": texts.put((String) owner, entries(message.getData().get("texts"))); break;
             case "lines": lines.put((String) owner, lines(message.getData().get("lines"))); lineMarkers.remove(owner); break;
             case "clear":
-                tiles.remove(owner); npcs.remove(owner); pies.remove(owner); lines.remove(owner);
+                tiles.remove(owner); pies.remove(owner); lines.remove(owner); texts.remove(owner);
+                for (Map<String, List<Map<String, Object>>> kind : highlights.values()) { kind.remove(owner); }
                 tileMarkers.remove(owner); pieMarkers.remove(owner); lineMarkers.remove(owner);
                 break;
             default: break;
@@ -149,7 +164,10 @@ final class ExternalMarks
         return Collections.unmodifiableList(result);
     }
 
-    void collect(List<Marker> markerOut, List<ModelTarget> modelOut)
+    void collect(List<Marker> markerOut, List<ModelTarget> modelOut) { collect(markerOut, modelOut, new ArrayList<>()); }
+
+    /** The marks of the moment: tiles, lines and pies as markers, highlights' models; outlines in other world views (a boat) to elsewhereOut. */
+    void collect(List<Marker> markerOut, List<ModelTarget> modelOut, List<ModelTarget> elsewhereOut)
     {
         WorldView wv = client.getTopLevelWorldView();
         if (wv == null) { return; }
@@ -181,42 +199,54 @@ final class ExternalMarks
         {
             List<Map<String, Object>> list = owner.getValue();
             Made made = pieMarkers.get(owner.getKey());
-            if (made == null || !made.of(list, plane) || list.stream().anyMatch(ExternalMarks::timed))
+            // Pies that fill by the clock or follow a character are made anew each time.
+            if (made == null || !made.of(list, plane) || list.stream().anyMatch(p -> timed(p) || follows(p)))
             {
                 made = new Made(list, plane, pieMarkers(wv, owner.getKey(), list, now));
                 pieMarkers.put(owner.getKey(), made);
             }
             onFloor(made.markers, plane, markerOut);
         }
-        for (Map.Entry<String, List<Map<String, Object>>> owner : npcs.entrySet())
+        for (Map.Entry<String, List<Map<String, Object>>> owner : texts.entrySet())
         {
+            int n = 0;
             for (Map<String, Object> t : owner.getValue())
             {
-                NPC npc = npc(wv, t);
                 Color color = color(t.get("color"), null);
-                if (npc == null || color == null) { continue; }
-                Color fill = color(t.get("fill"), Marker.BLACK_FILL);
-                int width = number(t.get("width"), 2);
-                Object style = t.get("style");
-                String key = "ext:" + owner.getKey() + ":npc:" + npc.getIndex() + ":" + style;
-                NPCComposition composition = npc.getTransformedComposition();
-                int size = composition == null ? 1 : Math.max(1, Math.min(64, composition.getSize()));
-                if ("tile".equals(style) || "truetile".equals(style))
+                Object text = t.get("text");
+                if (color == null || !(text instanceof String) || ((String) text).isEmpty()) { continue; }
+                for (Place at : places(wv, t))
                 {
-                    LocalPoint local = "tile".equals(style) ? npc.getLocalLocation()
-                        : LocalPoint.fromWorld(wv, npc.getWorldLocation());
-                    if (local == null) { continue; }
-                    if ("truetile".equals(style)) { local = local.plus((size - 1) * 64, (size - 1) * 64); }
-                    Marker m = new Marker(key, local, wv.getPlane(), size, size, color, fill, width, null);
+                    // No border and no fill: only the label, drawn as a tile's.
+                    Marker m = new Marker("ext:" + owner.getKey() + ":text:" + n++, at.point, at.plane, 1, 1, color, null, 0, (String) text);
+                    m.lift = number(t.get("height"), at.lift);
                     m.layer = Marker.EXTERNAL;
-                    markerOut.add(m);
+                    if (m.plane == plane || at.follows) { markerOut.add(m); }
                 }
-                else if ("outline".equals(style)) { modelOut.add(ModelTarget.npcOutline(key, npc, color, width)); }
-                else if ("clickbox".equals(style))
+            }
+        }
+        for (String kind : HIGHLIGHTS)
+        {
+            Map<String, List<Map<String, Object>>> owners = highlights.get(kind);
+            if (owners == null) { continue; }
+            for (Map.Entry<String, List<Map<String, Object>>> owner : owners.entrySet())
+            {
+                Set<String> keys = new HashSet<>();
+                for (Map<String, Object> t : owner.getValue())
                 {
-                    modelOut.add(ModelTarget.npcClickbox(key, npc, color, fill, width, client));
+                    Color color = color(t.get("color"), null);
+                    if (color == null) { continue; }
+                    Color fill = color(t.get("fill"), Marker.BLACK_FILL);
+                    int width = number(t.get("width"), 2), styles = styles(t);
+                    for (Object thing : things(kind, wv, t))
+                    {
+                        String key = "ext:" + owner.getKey() + ":" + Highlights.key(thing);
+                        // The same thing twice in a list keeps both.
+                        if (!keys.add(key)) { key += ":" + keys.size(); keys.add(key); }
+                        Highlights.models(modelOut, elsewhereOut, wv, client, key, thing, styles, color, fill, width);
+                        Highlights.tiles(markerOut, Marker.EXTERNAL, key, thing, styles, color, fill, width);
+                    }
                 }
-                else { modelOut.add(ModelTarget.npc(key, npc, color, fill, width)); }
             }
         }
     }
@@ -342,27 +372,24 @@ final class ExternalMarks
      * clockwise from the top, then the ring. Sized in local units, so they grow and shrink with the world as the camera
      * zooms.
      */
-    private static List<Marker> pieMarkers(WorldView wv, String owner, List<Map<String, Object>> entries, long now)
+    private List<Marker> pieMarkers(WorldView wv, String owner, List<Map<String, Object>> entries, long now)
     {
         List<Marker> out = new ArrayList<>();
         int n = 0;
         for (Map<String, Object> p : entries)
         {
-            WorldPoint point = point(p);
             Color fill = color(p.get("color"), null), border = color(p.get("border"), null);
-            if (point == null || fill == null && border == null) { continue; }
+            if (fill == null && border == null) { continue; }
             double progress = progress(p, now);
             float radius = Math.max(8, Math.min(1024, number(p.get("size"), 64))) / 2f;
-            int lift = number(p.get("height"), 0);
-            for (WorldPoint place : places(wv, point))
+            for (Place at : places(wv, p))
             {
-                LocalPoint local = LocalPoint.fromWorld(wv, place);
-                if (local == null) { continue; }
+                int lift = number(p.get("height"), at.lift);
                 String key = "ext:" + owner + ":pie:" + n++;
-                if (fill != null && progress > 0) { out.add(round(key, local, place.getPlane(), lift, radius, progress, null, fill, 0)); }
+                if (fill != null && progress > 0) { out.add(round(key, at.point, at.plane, lift, radius, progress, null, fill, 0)); }
                 if (border != null)
                 {
-                    out.add(round(key + ":ring", local, place.getPlane(), lift, radius, 1, border, null, number(p.get("width"), 1)));
+                    out.add(round(key + ":ring", at.point, at.plane, lift, radius, 1, border, null, number(p.get("width"), 1)));
                 }
             }
         }
@@ -422,12 +449,121 @@ final class ExternalMarks
         return null;
     }
 
-    private static NPC npc(WorldView wv, Map<String, Object> t)
+    /** A highlight's styles: style, or styles (a list); hull when neither names one. */
+    private static int styles(Map<String, Object> t)
     {
-        Object npc = t.get("npc");
-        if (npc instanceof NPC) { return ((NPC) npc).getWorldView() == wv ? (NPC) npc : null; }
-        Object index = t.get("index");
-        return index instanceof Number ? wv.npcs().byIndex(((Number) index).intValue()) : null;
+        int bits = 0;
+        if (t.get("style") instanceof String) { bits |= Highlights.named((String) t.get("style")); }
+        if (t.get("styles") instanceof Collection) { for (Object s : (Collection<?>) t.get("styles")) { if (s instanceof String) { bits |= Highlights.named((String) s); } } }
+        return t.get("style") == null && t.get("styles") == null ? Highlights.HULL : bits;
+    }
+
+    /** What a highlight is of, where it is now: none while it is not there; an object or item in every place an instance shows its tile. */
+    private List<Object> things(String kind, WorldView wv, Map<String, Object> t)
+    {
+        List<Object> out = new ArrayList<>();
+        switch (kind)
+        {
+            case "npcs": case "players":
+                Actor a = actor(wv, t);
+                if (a != null && ("npcs".equals(kind) ? a instanceof NPC : a instanceof Player)) { out.add(a); }
+                break;
+            default:
+                Object object = t.get("object"), id = t.get("id");
+                if ("objects".equals(kind) && object instanceof TileObject) { if (here((TileObject) object)) { out.add(object); } break; }
+                WorldPoint point = point(t);
+                if (point == null || !(id instanceof Number)) { break; }
+                for (WorldPoint place : places(wv, point))
+                {
+                    Tile tile = tile(wv, place);
+                    Object found = "objects".equals(kind) ? MouseTargets.object(client, tile, ((Number) id).intValue()) : MouseTargets.item(tile, ((Number) id).intValue());
+                    if (found != null) { out.add(found); }
+                }
+        }
+        return out;
+    }
+
+    /** The NPC (npc or index) or player (player or name) a map names, while it is there; null for none. */
+    private static Actor actor(WorldView wv, Map<String, Object> t)
+    {
+        Object npc = t.get("npc"), index = t.get("index"), player = t.get("player"), name = t.get("name");
+        if (npc instanceof NPC) { return here((NPC) npc) ? (NPC) npc : null; }
+        if (index instanceof Number) { return wv.npcs().byIndex(((Number) index).intValue()); }
+        if (player instanceof Player) { return here((Player) player) ? (Player) player : null; }
+        return name instanceof String ? player(wv, Text.standardize((String) name)) : null;
+    }
+
+    /** Whether a pie or text follows a character rather than standing on a point. */
+    private static boolean follows(Map<String, Object> t) { return t.get("npc") != null || t.get("index") != null || t.get("player") != null || t.get("name") != null; }
+
+    /** Where a pie or text stands: its point, its plane, its height above the ground by default; whether it follows a character. */
+    private static final class Place
+    {
+        final LocalPoint point;
+        final int plane, lift;
+        final boolean follows;
+
+        Place(LocalPoint point, int plane, int lift, boolean follows) { this.point = point; this.plane = plane; this.lift = lift; this.follows = follows; }
+    }
+
+    /**
+     * Where a pie or text stands now: on the character it follows, above its head as the game's overhead text; else
+     * on its point, in every place an instance shows it.
+     */
+    private static List<Place> places(WorldView wv, Map<String, Object> t)
+    {
+        List<Place> out = new ArrayList<>();
+        if (follows(t))
+        {
+            Actor a = actor(wv, t);
+            LocalPoint local = a == null ? null : a.getLocalLocation();
+            if (local != null) { out.add(new Place(local, a.getWorldView().getPlane(), a.getLogicalHeight() + 40, true)); }
+            return out;
+        }
+        WorldPoint point = point(t);
+        if (point == null) { return out; }
+        for (WorldPoint place : places(wv, point))
+        {
+            LocalPoint local = LocalPoint.fromWorld(wv, place);
+            if (local != null) { out.add(new Place(local, place.getPlane(), 0, false)); }
+        }
+        return out;
+    }
+
+    /** The player of this standardized name, in your world view or one within it (a boat). */
+    private static Player player(WorldView wv, String name)
+    {
+        for (Player p : wv.players()) { if (p != null && name.equals(Text.standardize(p.getName()))) { return p; } }
+        Iterable<? extends WorldView> subs = wv.worldViews();
+        for (WorldView sub : subs == null ? Collections.<WorldView>emptyList() : subs) { Player p = player(sub, name); if (p != null) { return p; } }
+        return null;
+    }
+
+    /** Whether a character sent as itself is still there: a despawned one is not drawn where it was. */
+    private static boolean here(NPC n) { WorldView wv = n.getWorldView(); return wv != null && wv.npcs().byIndex(n.getIndex()) == n; }
+
+    private static boolean here(Player p) { WorldView wv = p.getWorldView(); return wv != null && wv.players().byIndex(p.getId()) == p; }
+
+    /** Whether an object sent as itself is still on its tile. */
+    private static boolean here(TileObject o)
+    {
+        WorldView wv = o.getWorldView();
+        Tile tile = wv == null ? null : tile(wv, o.getWorldLocation());
+        if (tile == null) { return false; }
+        for (GameObject g : tile.getGameObjects()) { if (g == o) { return true; } }
+        return tile.getWallObject() == o || tile.getDecorativeObject() == o || tile.getGroundObject() == o;
+    }
+
+    /** The scene tile of a world point, also in the extended tiles around the loaded area. */
+    private static Tile tile(WorldView wv, WorldPoint p)
+    {
+        Scene scene = wv.getScene();
+        Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
+        if (tiles == null) { tiles = scene == null ? null : scene.getTiles(); }
+        int plane = p.getPlane();
+        if (tiles == null || plane < 0 || plane >= tiles.length) { return null; }
+        int offset = (tiles[plane].length - wv.getSizeX()) / 2, x = p.getX() - wv.getBaseX() + offset, y = p.getY() - wv.getBaseY() + offset;
+        return x < 0 || y < 0 || x >= tiles[plane].length || y >= tiles[plane][x].length ? null : tiles[plane][x][y];
     }
 
     private static Color color(Object value, Color fallback)

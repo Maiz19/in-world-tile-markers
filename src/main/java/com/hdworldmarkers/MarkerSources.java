@@ -80,7 +80,7 @@ final class MarkerSources
     private List<Marker> lineMarkers;
     /** Outlines of tagged NPCs and marked objects in other world views (a boat): only RuneLite's 2D outline draws them. */
     private List<ModelTarget> outlinesElsewhere = Collections.emptyList();
-    /** Per style the names and patterns (with *) of its list under NPC styles, as typed. */
+    /** Per style the names and patterns (with *) of its list under NPC names, as typed. */
     private final Map<NpcStyle, List<String>> styleNames = new EnumMap<>(NpcStyle.class);
     /** The styles (bits) per NPC name, worked out from the lists once per name rather than per frame. */
     private final Map<String, Integer> nameStyles = new HashMap<>();
@@ -201,6 +201,8 @@ final class MarkerSources
 
     /** Your Slayer task's NPCs, from the Slayer plugin. */
     @Inject SlayerPluginService slayer;
+    /** Interact highlight's outlines; null in tests that leave it out. */
+    @Inject InteractHighlight interact;
     /** The paths, whose end the destination tile is; null in tests that leave it out (the client's destination then). */
     @Inject PathTracker paths;
 
@@ -525,6 +527,9 @@ final class MarkerSources
             if (m != null) { result.add(m); }
         }
         agility.tiles(result);
+        // Interact highlight's tiles at any distance, as its outlines.
+        List<Marker> interactTiles = new ArrayList<>();
+        if (interact != null && !interactHidden(player, now)) { interact.tiles(interactTiles); }
         int distance = drawDistance(config);
         LocalPoint origin = player.getLocalLocation();
         result.removeIf(m -> {
@@ -536,7 +541,36 @@ final class MarkerSources
                 || (!own && m.point.getWorldView() == origin.getWorldView()
                     && m.point.distanceTo(origin) > distance);
         });
+        giveWayTiles(result, interactTiles);
+        for (Marker m : interactTiles)
+        {
+            WorldView wv = client.getWorldView(m.point.getWorldView());
+            if (wv != null && m.plane == wv.getPlane()) { result.add(m); }
+        }
         return result;
+    }
+
+    /**
+     * Leaves out a marked NPC's or object's tile where Interact highlight draws the same tile of it (the same place
+     * and size): the two were drawn over each other. Interact highlight's goes first.
+     */
+    static void giveWayTiles(List<Marker> markers, List<Marker> interacting)
+    {
+        if (interacting.isEmpty()) { return; }
+        markers.removeIf(m -> (m.key.startsWith("npc:") || m.key.startsWith("object:")) && interacting.stream().anyMatch(i ->
+            i.point.equals(m.point) && i.plane == m.plane && i.width == m.width && i.height == m.height));
+    }
+
+    /**
+     * Leaves out the hull, outline or clickbox of a thing (an NPC, an object's model part) that Interact highlight
+     * draws in the same style: a marked object's hull and its interact hull were drawn over each other. Interact
+     * highlight's goes first.
+     */
+    static void giveWay(List<ModelTarget> targets, List<ModelTarget> interacting)
+    {
+        if (interacting.isEmpty()) { return; }
+        targets.removeIf(t -> interacting.stream().anyMatch(i -> i.outline == t.outline && i.clickbox == t.clickbox
+            && (i.actor != null ? i.actor == t.actor : i.object != null && i.object == t.object && i.renderable == t.renderable)));
     }
 
     /** The marked tiles as markers in the tile options of the moment, made again only when those or the tiles changed. */
@@ -603,6 +637,9 @@ final class MarkerSources
         Player player = client.getLocalPlayer();
         if (player != null && target != null && (target == player || target == player.getInteracting())) { lastHit = now; }
     }
+
+    /** Whether Interact highlight is hidden now: in combat, with Hide in combat on. */
+    private boolean interactHidden(Player player, long now) { return config.interactHideInCombat() && inCombat(player, now); }
 
     /**
      * In combat: a recent hitsplat on you or your target, or you and an attackable NPC
@@ -825,8 +862,8 @@ final class MarkerSources
                 continue;
             }
             String key = "object:" + object.getHash();
-            if ((o.flags & ObjectMarkerSource.HF_HULL) != 0) { addParts(result, key, object, o, false); }
-            if ((o.flags & ObjectMarkerSource.HF_OUTLINE) != 0) { addParts(result, key, object, o, true); }
+            if ((o.flags & ObjectMarkerSource.HF_HULL) != 0) { addParts(result, key, object, o.border, o.hullFill, o.borderWidth, false); }
+            if ((o.flags & ObjectMarkerSource.HF_OUTLINE) != 0) { addParts(result, key, object, o.border, Marker.NO_FILL, o.borderWidth, true); }
             if ((o.flags & ObjectMarkerSource.HF_CLICKBOX) != 0)
             {
                 Renderable renderable = ModelTarget.renderable(object);
@@ -850,6 +887,16 @@ final class MarkerSources
         }
         result.removeIf(t -> { Integer d = distances.get(t); return d == null || d > distance; });
         result.sort(Comparator.comparingInt(distances::get));
+        // What the mouse is on and what you interact with first, at any distance.
+        if (interact != null && !interactHidden(player, System.currentTimeMillis()))
+        {
+            List<ModelTarget> interacting = new ArrayList<>(), interactingElsewhere = new ArrayList<>();
+            interact.targets(interacting, interactingElsewhere);
+            giveWay(result, interacting);
+            giveWay(elsewhere, interactingElsewhere);
+            result.addAll(0, interacting);
+            elsewhere.addAll(interactingElsewhere);
+        }
         outlinesElsewhere = elsewhere;
         return result;
     }
@@ -857,39 +904,48 @@ final class MarkerSources
     /** The outlines in other world views found by the last modelTargets(), for RuneLite's 2D outline renderer. */
     List<ModelTarget> outlinesElsewhere() { return outlinesElsewhere; }
 
+    /** Other plugins' outlines in other world views, after those of the last modelTargets(). */
+    void addOutlinesElsewhere(List<ModelTarget> more)
+    {
+        if (more.isEmpty()) { return; }
+        List<ModelTarget> all = new ArrayList<>(outlinesElsewhere);
+        all.addAll(more);
+        outlinesElsewhere = all;
+    }
+
     /** Hull or outline parts as in ObjectIndicatorsOverlay.renderConvexHull: walls and decorations have two. */
-    private static void addParts(List<ModelTarget> out, String key, TileObject object, ObjectMarkerSource.Resolved o, boolean outline)
+    static void addParts(List<ModelTarget> out, String key, TileObject object, Color border, Color fill, double width, boolean outline)
     {
         if (object instanceof GameObject)
         {
             GameObject go = (GameObject) object;
-            part(out, key, "", object, go.getRenderable(), 0, 0, go::getConvexHull, o, outline);
+            part(out, key, "", object, go.getRenderable(), 0, 0, go::getConvexHull, border, fill, width, outline);
         }
         else if (object instanceof WallObject)
         {
             WallObject wall = (WallObject) object;
-            part(out, key, "", object, wall.getRenderable1(), 0, 0, wall::getConvexHull, o, outline);
-            part(out, key, "2", object, wall.getRenderable2(), 0, 0, wall::getConvexHull2, o, outline);
+            part(out, key, "", object, wall.getRenderable1(), 0, 0, wall::getConvexHull, border, fill, width, outline);
+            part(out, key, "2", object, wall.getRenderable2(), 0, 0, wall::getConvexHull2, border, fill, width, outline);
         }
         else if (object instanceof DecorativeObject)
         {
             DecorativeObject decor = (DecorativeObject) object;
-            part(out, key, "", object, decor.getRenderable(), decor.getXOffset(), decor.getYOffset(), decor::getConvexHull, o, outline);
-            part(out, key, "2", object, decor.getRenderable2(), decor.getXOffset2(), decor.getYOffset2(), decor::getConvexHull2, o, outline);
+            part(out, key, "", object, decor.getRenderable(), decor.getXOffset(), decor.getYOffset(), decor::getConvexHull, border, fill, width, outline);
+            part(out, key, "2", object, decor.getRenderable2(), decor.getXOffset2(), decor.getYOffset2(), decor::getConvexHull2, border, fill, width, outline);
         }
         else if (object instanceof GroundObject)
         {
             GroundObject g = (GroundObject) object;
-            part(out, key, "", object, g.getRenderable(), 0, 0, g::getConvexHull, o, outline);
+            part(out, key, "", object, g.getRenderable(), 0, 0, g::getConvexHull, border, fill, width, outline);
         }
     }
 
     private static void part(List<ModelTarget> out, String key, String n, TileObject object, Renderable r, int dx, int dy,
-        java.util.function.Supplier<java.awt.Shape> hull, ObjectMarkerSource.Resolved o, boolean outline)
+        java.util.function.Supplier<java.awt.Shape> hull, Color border, Color fill, double width, boolean outline)
     {
         if (r == null) { return; }
-        out.add(outline ? ModelTarget.objectOutline(key + ":outline" + n, object, r, dx, dy, o.border, o.borderWidth)
-            : ModelTarget.object(key + ":hull" + n, object, r, dx, dy, o.border, o.hullFill, o.borderWidth, false, hull));
+        out.add(outline ? ModelTarget.objectOutline(key + ":outline" + n, object, r, dx, dy, border, width)
+            : ModelTarget.object(key + ":hull" + n, object, r, dx, dy, border, fill, width, false, hull));
     }
 
     /**

@@ -26,7 +26,8 @@
  * The Tile Indicators options reuse the option names and descriptions of RuneLite's
  * TileIndicatorsConfig (copyright (c) 2018 Tomas Slusny, BSD 2-Clause; META-INF/LICENSE-runelite), the marking options
  * option names of its GroundMarkerConfig, ObjectIndicatorsConfig and NpcIndicatorsConfig, and the Agility options those
- * of its AgilityConfig (copyright (c) 2018 Cas; same license); the path
+ * of its AgilityConfig (copyright (c) 2018 Cas; same license), the Interact highlight options those of its
+ * InteractHighlightConfig (copyright (c) 2021 Adam; same license); the path
  * options those of Path Marker's PathMarkerConfig (copyright (c) 2022 GeChallengeM, BSD 2-Clause;
  * META-INF/LICENSE-path-marker). See THIRD_PARTY_NOTICES.md.
  */
@@ -49,30 +50,34 @@ public interface HdWorldMarkersConfig extends Config
 
     @ConfigSection(name = "General", description = "General options", position = 0)
     String generalSection = "general";
-    @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, Mark", position = 1)
+    @ConfigSection(name = "Tile markers", description = "Tiles you mark: Shift + right-click a tile, HD Mark", position = 1)
     String groundSection = "ground";
-    @ConfigSection(name = "Line markers", description = "Lines you draw along tile sides: Shift + right-click a tile, Add line; the mouse wheel turns a new line while Shift is held", position = 2)
+    @ConfigSection(name = "Line markers", description = "Lines you draw along tile sides: Shift + right-click a tile, HD Add line; the mouse wheel turns a new line while Shift is held", position = 2, closedByDefault = true)
     String lineSection = "lines";
-    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 3)
+    @ConfigSection(name = "Destination tile", description = "Tile Indicators: destination tile", position = 3, closedByDefault = true)
     String destinationSection = "destinationTile";
-    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 4)
+    @ConfigSection(name = "Hovered tile", description = "Tile Indicators: hovered tile", position = 4, closedByDefault = true)
     String hoveredSection = "hoveredTile";
-    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 5)
+    @ConfigSection(name = "Current tile", description = "Tile Indicators: your true tile", position = 5, closedByDefault = true)
     String currentSection = "currentTile";
-    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, Tag-All", position = 6)
+    @ConfigSection(name = "NPCs", description = "NPCs you tag by name: Shift + right-click an NPC, HD Tag-All", position = 6, closedByDefault = true)
     String npcSection = "npcs";
-    @ConfigSection(name = "Slayer task", description = "Your Slayer task's NPCs, as the Slayer plugin finds them (it must be on)", position = 7)
+    @ConfigSection(name = "Slayer task", description = "Your Slayer task's NPCs, as the Slayer plugin finds them (it must be on)", position = 7, closedByDefault = true)
     String slayerSection = "slayerTask";
-    @ConfigSection(name = "NPC styles", description = "Per style the names of the NPCs that have it, and its colors. Tag style on a tagged NPC adds or removes its name", position = 8)
+    @ConfigSection(name = "NPC styles", description = "Per style its colors; the names of the NPCs that have it are under NPC names", position = 8, closedByDefault = true)
     String npcStyleSection = "npcStyles";
-    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, Mark object", position = 9)
+    @ConfigSection(name = "NPC names", description = "Per NPC style the names of the NPCs that have it, separated by commas; * matches any text. Tag style on a tagged NPC adds or removes its name", position = 9, closedByDefault = true)
+    String npcNamesSection = "npcNames";
+    @ConfigSection(name = "Objects", description = "Objects you mark: Shift + right-click an object, HD Mark object", position = 10, closedByDefault = true)
     String objectSection = "objects";
-    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 10)
+    @ConfigSection(name = "Interact highlight", description = "Interact Highlight: what the mouse is on and what you clicked, in the styles you pick", position = 11, closedByDefault = true)
+    String interactSection = "interact";
+    @ConfigSection(name = "Agility", description = "Agility course obstacles, shortcuts and marks of grace", position = 12, closedByDefault = true)
     String agilitySection = "agility";
-    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 11)
+    @ConfigSection(name = "Active path", description = "Path Marker: the path you are walking", position = 13, closedByDefault = true)
     String activePathSection = "activePath";
 
-    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 12, closedByDefault = true)
+    @ConfigSection(name = "Hover path", description = "Path Marker: the path to the hovered tile", position = 14, closedByDefault = true)
     String hoverPathSection = "hoverPath";
 
     // General
@@ -95,7 +100,7 @@ public interface HdWorldMarkersConfig extends Config
 
     // Tile markers
 
-    @ConfigItem(keyName = "markTiles", name = "Mark option", description = "Shift + right-click a tile: Mark, Unmark and Label", position = 0, section = groundSection)
+    @ConfigItem(keyName = "markTiles", name = "Mark option", description = "Shift + right-click a tile: HD Mark, HD Unmark and HD Label", position = 0, section = groundSection)
     default boolean markTiles() { return true; }
 
     @Alpha
@@ -118,7 +123,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "followOtherPlugins", name = "Follow other plugins", description = "What you mark or unmark in Ground Markers, Line Markers, Object Markers, NPC Indicators or Better NPC Highlight is marked or unmarked here at once, while they are installed. Off: only Sync copies their marks", position = 4, section = groundSection)
     default boolean followOtherPlugins() { return true; }
 
-    @ConfigItem(keyName = "showImportExport", name = "Import, export, sync, clear", description = "Import, Export, Sync and Clear on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers, NPC Indicators and Better NPC Highlight (its name lists); Clear removes the tiles of the area you are in", position = 5, section = groundSection)
+    @ConfigItem(keyName = "showImportExport", name = "Import, export, sync, clear", description = "Import, Export, Sync, Clear and Clear lines on the world map orb's right-click menu. Import takes Ground Markers' export; Sync copies new marks from Ground Markers, Object Markers, NPC Indicators and Better NPC Highlight (its name lists); Clear removes the tiles of the area you are in, Clear lines its lines", position = 5, section = groundSection)
     default boolean showImportExport() { return true; }
 
     // Line markers
@@ -126,7 +131,7 @@ public interface HdWorldMarkersConfig extends Config
     /** The side of a tile a line runs along, in Line Markers' names and order (its saved lines name them). */
     enum Edge { WEST, EAST, SOUTH, NORTH }
 
-    @ConfigItem(keyName = "markLines", name = "Add line option", description = "Shift + right-click a tile: Add line and Remove line. While Shift stays held, the mouse wheel turns the line you just added to its next side", position = 0, section = lineSection)
+    @ConfigItem(keyName = "markLines", name = "Add line option", description = "Shift + right-click a tile: HD Add line and HD Extend line. While Shift stays held, the mouse wheel turns the line you just added to its next side. HD Remove line shows on a tile with a line also with this off", position = 0, section = lineSection)
     default boolean markLines() { return false; }
 
     @Alpha
@@ -162,13 +167,13 @@ public interface HdWorldMarkersConfig extends Config
         @Override public String toString() { return label; }
     }
 
-    @ConfigItem(keyName = "tagNpcs", name = "Tag option", description = "Shift + right-click an NPC: Tag-All or Un-tag-All, every NPC with its name", position = 0, section = npcSection)
+    @ConfigItem(keyName = "tagNpcs", name = "Tag option", description = "Shift + right-click an NPC: HD Tag-All or HD Un-tag-All, every NPC with its name", position = 0, section = npcSection)
     default boolean tagNpcs() { return true; }
 
-    @ConfigItem(keyName = "npcTagStyles", name = "Tag styles", description = "Tag-All adds the name to these styles' lists under NPC styles. Changing this later leaves the names you tagged as they are. Ctrl + click picks more than one; none hides Tag-All", position = 1, section = npcSection)
+    @ConfigItem(keyName = "npcTagStyles", name = "Tag styles", description = "Tag-All adds the name to these styles' lists under NPC names. Changing this later leaves the names you tagged as they are. Ctrl + click picks more than one; none hides Tag-All", position = 1, section = npcSection)
     default Set<NpcStyle> npcTagStyles() { return EnumSet.of(NpcStyle.TRUE_TILE, NpcStyle.SW_TRUE_TILE); }
 
-    @ConfigItem(keyName = "npcHullNames", name = "Hull names", description = "NPCs with their hull highlighted: names separated by commas, * matches any text", position = 0, section = npcStyleSection)
+    @ConfigItem(keyName = "npcHullNames", name = "Hull names", description = "NPCs with their hull highlighted: names separated by commas, * matches any text", position = 0, section = npcNamesSection)
     default String npcHullNames() { return ""; }
 
     @Alpha
@@ -179,7 +184,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcHullFill", name = "Hull fill", description = "Fill color of the hull; fully see-through (the default) draws no fill", position = 2, section = npcStyleSection)
     default Color npcHullFill() { return new Color(0, 229, 255, 0); }
 
-    @ConfigItem(keyName = "npcTileNames", name = "Tile names", description = "NPCs with the tiles they stand on highlighted: names separated by commas, * matches any text", position = 3, section = npcStyleSection)
+    @ConfigItem(keyName = "npcTileNames", name = "Tile names", description = "NPCs with the tiles they stand on highlighted: names separated by commas, * matches any text", position = 1, section = npcNamesSection)
     default String npcTileNames() { return ""; }
 
     @Alpha
@@ -190,7 +195,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcTileFill", name = "Tile fill", description = "Fill color of the tile", position = 5, section = npcStyleSection)
     default Color npcTileFill() { return new Color(0, 255, 255, 20); }
 
-    @ConfigItem(keyName = "npcTrueTileNames", name = "True tile names", description = "NPCs with the tiles they are on for the server highlighted: names separated by commas, * matches any text", position = 6, section = npcStyleSection)
+    @ConfigItem(keyName = "npcTrueTileNames", name = "True tile names", description = "NPCs with the tiles they are on for the server highlighted: names separated by commas, * matches any text", position = 2, section = npcNamesSection)
     default String npcTrueTileNames() { return ""; }
 
     @Alpha
@@ -201,7 +206,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcTrueTileFill", name = "True tile fill", description = "Fill color of the true tile", position = 8, section = npcStyleSection)
     default Color npcTrueTileFill() { return new Color(0, 255, 255, 20); }
 
-    @ConfigItem(keyName = "npcSouthWestTileNames", name = "South west tile names", description = "NPCs with their south western tile highlighted: names separated by commas, * matches any text", position = 9, section = npcStyleSection)
+    @ConfigItem(keyName = "npcSouthWestTileNames", name = "South west tile names", description = "NPCs with their south western tile highlighted: names separated by commas, * matches any text", position = 3, section = npcNamesSection)
     default String npcSouthWestTileNames() { return ""; }
 
     @Alpha
@@ -212,7 +217,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcSouthWestTileFill", name = "South west tile fill", description = "Fill color of the south west tile", position = 11, section = npcStyleSection)
     default Color npcSouthWestTileFill() { return new Color(0, 255, 255, 20); }
 
-    @ConfigItem(keyName = "npcSouthWestTrueTileNames", name = "South west true tile names", description = "NPCs with their south western true tile highlighted: names separated by commas, * matches any text", position = 12, section = npcStyleSection)
+    @ConfigItem(keyName = "npcSouthWestTrueTileNames", name = "South west true tile names", description = "NPCs with their south western true tile highlighted: names separated by commas, * matches any text", position = 4, section = npcNamesSection)
     default String npcSouthWestTrueTileNames() { return ""; }
 
     @Alpha
@@ -223,14 +228,14 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcSouthWestTrueTileFill", name = "South west true tile fill", description = "Fill color of the south west true tile", position = 14, section = npcStyleSection)
     default Color npcSouthWestTrueTileFill() { return new Color(0, 255, 255, 20); }
 
-    @ConfigItem(keyName = "npcOutlineNames", name = "Outline names", description = "NPCs with their outline highlighted: names separated by commas, * matches any text", position = 15, section = npcStyleSection)
+    @ConfigItem(keyName = "npcOutlineNames", name = "Outline names", description = "NPCs with their outline highlighted: names separated by commas, * matches any text", position = 5, section = npcNamesSection)
     default String npcOutlineNames() { return ""; }
 
     @Alpha
     @ConfigItem(keyName = "npcOutlineColor", name = "Outline color", description = "Border color of the outline", position = 16, section = npcStyleSection)
     default Color npcOutlineColor() { return Color.CYAN; }
 
-    @ConfigItem(keyName = "npcClickboxNames", name = "Clickbox names", description = "NPCs with their clickbox highlighted: names separated by commas, * matches any text", position = 17, section = npcStyleSection)
+    @ConfigItem(keyName = "npcClickboxNames", name = "Clickbox names", description = "NPCs with their clickbox highlighted: names separated by commas, * matches any text", position = 6, section = npcNamesSection)
     default String npcClickboxNames() { return ""; }
 
     @Alpha
@@ -254,7 +259,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcsInFrontOfTiles", name = "Draw NPCs in front of marks (fps heavy)", description = "Tagged NPCs, and those under In front names, are drawn in front of the marks. Needs Through walls", position = 8, section = npcSection)
     default boolean npcsInFrontOfTiles() { return false; }
 
-    @ConfigItem(keyName = "npcInFrontNames", name = "In front names", description = "Names of NPCs kept in front of the marks without being tagged, with NPCs in front of marks on: Shift + right-click an NPC, In front. Separated by commas; * matches any text", position = 9, section = npcSection)
+    @ConfigItem(keyName = "npcInFrontNames", name = "In front names", description = "Names of NPCs kept in front of the marks without being tagged, with NPCs in front of marks on: Shift + right-click an NPC, HD In front. Separated by commas; * matches any text", position = 9, section = npcSection)
     default String npcInFrontNames() { return ""; }
 
     @ConfigItem(keyName = "npcSouthWestCorner", name = "South west as corner", description = "Draws the south west tile and south west true tile as a corner instead: the south west half of the tile, in Corner color and Corner fill", position = 10, section = npcSection)
@@ -410,7 +415,7 @@ public interface HdWorldMarkersConfig extends Config
 
     // Objects
 
-    @ConfigItem(keyName = "markObjects", name = "Mark object option", description = "Shift + right-click an object: Mark object or Unmark object", position = 0, section = objectSection)
+    @ConfigItem(keyName = "markObjects", name = "Mark object option", description = "Shift + right-click an object: HD Mark object or HD Unmark object", position = 0, section = objectSection)
     default boolean markObjects() { return true; }
 
     @Alpha
@@ -435,6 +440,72 @@ public interface HdWorldMarkersConfig extends Config
 
     @ConfigItem(keyName = "objectBorderWidth", name = "Border width", description = "Width of the highlight border", position = 7, section = objectSection)
     default double objectBorderWidth() { return 2; }
+
+    // Interact highlight, as RuneLite's Interact Highlight plugin
+
+    /** What Interact highlight outlines. */
+    enum Interactable
+    {
+        NPCS("NPCs"), OBJECTS("Objects"), ITEMS("Ground items");
+
+        final String label;
+
+        Interactable(String label) { this.label = label; }
+
+        @Override public String toString() { return label; }
+    }
+
+    /** How Interact highlight marks what it highlights. */
+    enum InteractStyle
+    {
+        OUTLINE("Outline"), HULL("Hull"), CLICKBOX("Clickbox"), TILE("Tile"), TRUE_TILE("True tile");
+
+        final String label;
+
+        InteractStyle(String label) { this.label = label; }
+
+        @Override public String toString() { return label; }
+    }
+
+    // Not "interactThings": that held Players too, which the plugin no longer highlights (as RuneLite's Interact Highlight).
+    @ConfigItem(keyName = "interactTargets", name = "Highlight", description = "What gets highlighted: NPCs, objects and ground items (players never, as in RuneLite's Interact Highlight). Ctrl + click picks more than one", position = 0, section = interactSection)
+    default Set<Interactable> interactThings() { return EnumSet.allOf(Interactable.class); }
+
+    @ConfigItem(keyName = "interactHoverStyles", name = "Hover styles", description = "How what the mouse is on is highlighted; none (the default) turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 1, section = interactSection)
+    default Set<InteractStyle> interactHoverStyles() { return EnumSet.noneOf(InteractStyle.class); }
+
+    @ConfigItem(keyName = "interactStyles", name = "Interact styles", description = "How what you clicked or interact with is highlighted, until you get there or stop; none (the default) turns it off. True tile: where the server has an NPC (an object's is its tile). Ctrl + click picks more than one", position = 2, section = interactSection)
+    default Set<InteractStyle> interactStyles() { return EnumSet.noneOf(InteractStyle.class); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactHoverColor", name = "Hover color", description = "Border color of the object or ground item the mouse is on", position = 3, section = interactSection)
+    default Color interactHoverColor() { return new Color(0x9000FFFF, true); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactHoverFill", name = "Hover fill", description = "Fill color of the hull, clickbox and tiles of the object or ground item the mouse is on", position = 4, section = interactSection)
+    default Color interactHoverFill() { return new Color(0x0000FFFF, true); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactNpcHoverColor", name = "NPC hover color", description = "Border color of the NPC the mouse is on", position = 5, section = interactSection)
+    default Color interactNpcHoverColor() { return new Color(0x9000FFFF, true); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactNpcHoverFill", name = "NPC hover fill", description = "Fill color of the hull, clickbox and tiles of the NPC the mouse is on", position = 6, section = interactSection)
+    default Color interactNpcHoverFill() { return new Color(0x0000FFFF, true); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactColor", name = "Interact color", description = "Border color of what you clicked or interact with", position = 7, section = interactSection)
+    default Color interactColor() { return new Color(0x90FF0000, true); }
+
+    @Alpha
+    @ConfigItem(keyName = "interactFill", name = "Interact fill", description = "Fill color of the hull, clickbox and tiles of what you clicked or interact with", position = 8, section = interactSection)
+    default Color interactFill() { return new Color(0x00FF0000, true); }
+
+    @ConfigItem(keyName = "interactBorderWidth", name = "Border width", description = "Width of the borders", position = 9, section = interactSection)
+    default double interactBorderWidth() { return 3; }
+
+    @ConfigItem(keyName = "interactHideInCombat", name = "Hide in combat", description = "No hover or interact highlight while you are in combat (you hit or were hit in the last 6 seconds, or you or an NPC is attacking), nor on NPCs you can attack", position = 10, section = interactSection)
+    default boolean interactHideInCombat() { return false; }
 
     // Agility, as RuneLite's Agility plugin
 

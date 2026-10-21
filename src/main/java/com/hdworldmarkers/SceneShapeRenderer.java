@@ -113,6 +113,16 @@ final class SceneShapeRenderer
          */
         List<float[]> traced;
         int tracedFrame;
+        /**
+         * The loops are the last trace moved (over the budget), in staleFrame: traced again in a later frame, also when
+         * the projection comes out the same (a camera that stopped would otherwise keep them).
+         */
+        boolean loopsStale;
+        int staleFrame;
+        /** The region the outline paints (OutlinePaint), for these loops and this border width; and that of the loops last traced. */
+        OutlinePaint.Mesh paint, tracedPaint;
+        List<float[]> paintLoops;
+        float paintWidth, tracedPaintWidth;
         float tracedCenterX, tracedCenterY, tracedWidth, tracedHeight;
         /** The projected points' bounds: centre and size. */
         float centerX, centerY, width, height2d;
@@ -463,7 +473,7 @@ final class SceneShapeRenderer
         if (unavailable || location == null || location.getWorldView() != client.getTopLevelWorldView().getId())
         { return false; }
         int height = t.height(client);
-        if (t.npc == null && t.renderable == null) { return false; }
+        if (t.actor == null && t.renderable == null) { return false; }
         Projection projected = projection(t);
         if (projected.frame != frame && !unchanged(t, projected, location, height))
         {
@@ -478,61 +488,95 @@ final class SceneShapeRenderer
         if (Float.isNaN(depth) || projected.outside && !t.clickbox) { return culled(t.key); }
         int level = Terrain.level(client.getTopLevelWorldView(), location.getSceneX(), location.getSceneY(), t.plane());
         boolean asHull = false;
-        if (t.outline && projected.loops == null)
+        boolean stale = false;
+        if (t.outline && (projected.loops == null || projected.loopsStale && projected.staleFrame != frame))
         {
             // Over this frame's budget: the outline traced last, moved to where the model is now, rather than a hull border
-            // for a frame (outlines flipped between the two in a crowd); a hull border only before the first trace. At
-            // most a few frames old: past that it is traced anyway, or the farthest outlines would never be traced again.
+            // for a frame (outlines flipped between the two in a crowd). At most a few frames old: past that it is traced
+            // anyway, or the farthest outlines would never be traced again. A new outline (one just hovered) is traced at
+            // once too: a hull border first flickered in before it.
             boolean over = outlineNanos > OUTLINE_BUDGET_NANOS;
             if (over && projected.traced != null && frame - projected.tracedFrame <= STALE_OUTLINE_FRAMES)
             {
+                stale = true;
+                projected.loopsStale = true;
+                projected.staleFrame = frame;
                 projected.loops = moved(projected.traced, projected.tracedCenterX, projected.tracedCenterY, projected.tracedWidth,
                     projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d);
             }
             else
             {
-                asHull = over && projected.traced == null || !faces(t, projected);
+                asHull = !faces(t, projected);
                 if (!asHull)
                 {
                     long start = System.nanoTime();
                     projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
                         projected.c, projected.faces, projected.hidden, silhouetteScratch);
                     projected.tracedFrame = frame;
+                    projected.loopsStale = false;
                     projected.tracedCenterX = projected.centerX; projected.tracedCenterY = projected.centerY;
                     projected.tracedWidth = projected.width; projected.tracedHeight = projected.height2d;
                     outlineNanos += System.nanoTime() - start;
                 }
             }
         }
-        if (t.outline && !asHull || t.clickbox)
+        if (t.outline && !asHull)
+        {
+            // The region outside the silhouette within the border's width of it (see OutlinePaint), made again only
+            // when the silhouette or the width changed; its time counts towards the outline budget.
+            float w = width(t.borderWidth);
+            if (t.borderWidth > 0 && (projected.paintLoops != projected.loops || projected.paintWidth != w))
+            {
+                long start = System.nanoTime();
+                if (stale && projected.tracedPaint != null && projected.tracedPaintWidth == w)
+                {
+                    // Over the budget the region of the last trace is moved too, as its loops: making it again costs as
+                    // much as tracing.
+                    float[] xy = moved(Collections.singletonList(projected.tracedPaint.xy), projected.tracedCenterX, projected.tracedCenterY,
+                        projected.tracedWidth, projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d).get(0);
+                    projected.paint = new OutlinePaint.Mesh(xy, projected.tracedPaint.tris);
+                }
+                else
+                {
+                    projected.paint = projected.loops == null ? null : paint(projected.loops, w);
+                    if (projected.loops != null && projected.loops == projected.traced) { projected.tracedPaint = projected.paint; projected.tracedPaintWidth = w; }
+                }
+                projected.paintLoops = projected.loops;
+                projected.paintWidth = w;
+                outlineNanos += System.nanoTime() - start;
+            }
+            boolean any = projected.paint != null && t.borderWidth > 0 && outline.buildMesh(projected.paint.xy, projected.paint.tris, depth)
+                && !offscreen() && draw(t.key, location, level, t.color, Marker.NO_FILL, true);
+            // Close to the camera the faces left out can leave nothing to trace: then no shape this frame rather than
+            // RuneLite's 2D one, which flickered in and out as the camera moved.
+            return any || projected.partial && culled(t.key);
+        }
+        if (t.clickbox)
         {
             // A clickbox is RuneLite's, computed the same way from the float projection (FloatClickbox): RuneLite rounds
             // every face's rectangle to whole pixels, so its edge wobbled as the camera moved. Kept for static objects
             // while the camera stands still. Only when it cannot be made (off screen, behind the camera) RuneLite's own
             // is drawn.
-            List<float[]> polygons = t.outline ? projected.loops : twoModels(t.object) ? null : clickbox(t, projected);
+            List<float[]> polygons = twoModels(t.object) ? null : clickbox(t, projected);
             if (polygons == null)
             {
                 java.awt.Shape shape = t.shape();
                 polygons = shape == null ? Collections.emptyList() : polygons(shape);
             }
             // A union of rectangles can enclose holes, wound the other way round; RuneLite leaves them unfilled
-            // (even-odd), so they get their border only instead of being filled again over the rest. An outline is
-            // all border, outside the silhouette.
+            // (even-odd), so they get their border only instead of being filled again over the rest.
             double outer = polygons.isEmpty() ? 0 : Math.signum(FloatClickbox.area(largest(polygons)));
             boolean any = false;
             for (float[] full : polygons)
             {
                 boolean hole = polygons.size() > 1 && Math.signum(FloatClickbox.area(full)) != outer;
                 int h = load(fit(full), depth);
-                if (outline.buildPolygon(px, py, pd, h, width(t.borderWidth), t.outline) && !offscreen())
+                if (outline.buildPolygon(px, py, pd, h, width(t.borderWidth), false) && !offscreen())
                 {
                     draw(t.key, location, level, t.color, hole ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
                     any = true;
                 }
             }
-            // Close to the camera the faces left out can leave nothing to trace: then no shape this frame rather than
-            // RuneLite's 2D one, which flickered in and out as the camera moved.
             return any || projected.partial && culled(t.key);
         }
         if (projected.hull == null) { projected.hull = ModelShapes.convexHull(projected.x, projected.y, projected.n); }
@@ -584,7 +628,7 @@ final class SceneShapeRenderer
      */
     private Projection projection(ModelTarget t)
     {
-        Object owner = t.npc != null ? t.npc : t.object;
+        Object owner = t.actor != null ? t.actor : t.object;
         Projection first = projections.get(owner), p = first;
         while (p != null && p.part != t.renderable) { p = p.next; }
         if (p == null)
@@ -613,7 +657,7 @@ final class SceneShapeRenderer
      */
     private boolean unchanged(ModelTarget t, Projection p, LocalPoint location, int height)
     {
-        return t.npc == null && t.renderable instanceof Mesh
+        return t.actor == null && t.renderable instanceof Mesh
             && p.camera != null && p.camera.same(camera) && p.localX == location.getX() && p.localY == location.getY()
             && p.height == height && p.orientation == t.orientation() && p.frame == frame - 1;
     }
@@ -671,7 +715,7 @@ final class SceneShapeRenderer
             || minX - margin > vx + vw || minY - margin > vy + vh;
         // Actor models live in a shared client buffer: copy their faces now, into reused arrays, in case
         // another style of this NPC needs them after another actor's getModel(). Objects only for outlines.
-        if (t.outline || t.npc != null) { copyFaces(mesh, p); }
+        if (t.outline || t.actor != null) { copyFaces(mesh, p); }
         if (n == lastN && p.faces == lastFaces && p.faces > 0 && p.hiddenSum == lastHidden && p.viewport == lastViewport
             && Arrays.equals(p.x, 0, n, p.lastX, 0, n) && Arrays.equals(p.y, 0, n, p.lastY, 0, n))
         {
@@ -964,6 +1008,45 @@ final class SceneShapeRenderer
         if (Float.isNaN(ModelShapes.projectModel(camera, bx, by, bz, 8, localX, localY, height, 0, cx, cy)))
         { return null; }
         return ModelShapes.convexHull(cx, cy, 8);
+    }
+
+    /** Points an outline's loops keep at most together: the region it paints then always fits one scene object (see OutlinePaint). */
+    static final int MAX_OUTLINE_POINTS = 250;
+
+    /**
+     * The region an outline paints (OutlinePaint), its loops simplified further until it fits a scene object twice (a
+     * light colour's white layer is a second copy): round corners add points, and a jagged outline of
+     * MAX_OUTLINE_POINTS made a region too large, drawn as RuneLite's 2D outline instead.
+     */
+    static OutlinePaint.Mesh paint(List<float[]> loops, float width)
+    {
+        for (int most = MAX_OUTLINE_POINTS; ; most /= 2)
+        {
+            OutlinePaint.Mesh m = OutlinePaint.paint(fitAll(loops, most), width);
+            if (m == null || most < 16 || m.xy.length / 2 <= CarrierModels.MAX_VERTICES / 4 && m.tris.length / 3 <= CarrierModels.MAX_FACES / 4)
+            {
+                return m;
+            }
+        }
+    }
+
+    /** An outline's loops with at most this many points together, simplified as fit does; unchanged when few enough. */
+    static List<float[]> fitAll(List<float[]> loops, int most)
+    {
+        int total = 0;
+        for (float[] l : loops) { total += l.length / 2; }
+        List<float[]> out = loops;
+        for (double tolerance = 0.5; total > most && tolerance <= 128; tolerance *= 2)
+        {
+            out = new ArrayList<>(loops.size());
+            total = 0;
+            for (float[] l : loops)
+            {
+                float[] simple = Silhouette.simplify(l, tolerance);
+                if (simple.length >= 6) { out.add(simple); total += simple.length / 2; }
+            }
+        }
+        return out;
     }
 
     /** Points a drawn polygon keeps at most: its border and fill then always fit one scene object (see fit). */
@@ -1307,8 +1390,7 @@ final class SceneShapeRenderer
         for (Actor a : actors)
         {
             LocalPoint at = a.getLocalLocation();
-            // As the client places an actor: on its footprint's height, raised by its animation.
-            int height = Perspective.getFootprintTileHeight(client, at, a.getWorldView().getPlane(), a.getFootprintSize()) - a.getAnimationHeightOffset();
+            int height = ModelTarget.height(client, a, at);
             PlayerSilhouette s = a == p ? playerShape : npcShapes.computeIfAbsent((NPC) a, n -> new PlayerSilhouette());
             if (a != p) { kept.add((NPC) a); }
             Model model = a.getModel();

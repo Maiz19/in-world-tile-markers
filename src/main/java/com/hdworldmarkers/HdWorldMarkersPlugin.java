@@ -47,6 +47,7 @@ public class HdWorldMarkersPlugin extends Plugin
     @Inject private PathTracker paths;
     @Inject private ExternalMarks externalMarks;
     @Inject private Marking marking;
+    @Inject private InteractHighlight interact;
     @Inject private IndicatorOverlay overlay;
     @Inject private OverlayManager overlays;
     @Inject private PluginManager plugins;
@@ -100,10 +101,11 @@ public class HdWorldMarkersPlugin extends Plugin
         marking.shutDown();
         paths.shutDown();
         externalMarks.clear();
+        interact.clear();
         clientThread.invoke(() -> { if (!running) { reset(true); sources.clear(); } });
     }
 
-    private Object[] subscribers() { return new Object[]{paths, externalMarks, marking}; }
+    private Object[] subscribers() { return new Object[]{paths, externalMarks, marking, interact}; }
 
     private void reset() { reset(false); }
 
@@ -151,7 +153,9 @@ public class HdWorldMarkersPlugin extends Plugin
             List<Marker> tiles = sources.collect(pathTiles());
             List<ModelTarget> models = sources.modelTargets();
             // Marks other plugins sent through PluginMessage.
-            externalMarks.collect(tiles, models);
+            List<ModelTarget> elsewhere = new ArrayList<>();
+            externalMarks.collect(tiles, models, elsewhere);
+            sources.addOutlinesElsewhere(elsewhere);
             markers = tiles;
             sceneMarkers = nearest(tiles, client.getLocalPlayer().getLocalLocation(), MAX_TILES);
             modelTargets = models;
@@ -324,10 +328,19 @@ public class HdWorldMarkersPlugin extends Plugin
         return stretched.width / (float) real.width;
     }
 
-    /** Walk here: remember the clicked tile for the predicted destination. */
+    /**
+     * Walk here: remember the clicked tile for the predicted destination. Every other click that walks (an object, NPC,
+     * item or player), and a Walk here that meets nothing, ends the last prediction: it showed an old destination far
+     * away, and its path beside the new one.
+     */
     @Subscribe public void onMenuOptionClicked(MenuOptionClicked e)
     {
-        if (e.getMenuAction() != MenuAction.WALK || client.getLocalPlayer() == null) { return; }
+        if (client.getLocalPlayer() == null) { return; }
+        if (e.getMenuAction() != MenuAction.WALK)
+        {
+            if (PathTracker.ON_A_THING.contains(e.getMenuAction())) { sources.walkedTo(null); }
+            return;
+        }
         WorldView wv = client.getLocalPlayer().getWorldView();
         Tile tile = wv.getSelectedSceneTile();
         WorldPoint target = tile != null ? tile.getWorldLocation() : null;
@@ -340,7 +353,7 @@ public class HdWorldMarkersPlugin extends Plugin
             target = hit == null ? null : hit.tile;
             object = hit == null ? null : hit.object;
         }
-        if (target != null) { sources.walkedTo(target, object); }
+        sources.walkedTo(target, object);
     }
 
     @Subscribe public void onGameStateChanged(GameStateChanged e)

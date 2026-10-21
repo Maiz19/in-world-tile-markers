@@ -42,8 +42,6 @@ import java.util.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.*;
-import net.runelite.api.Point;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.client.game.AgilityShortcut;
@@ -172,11 +170,6 @@ final class AgilitySource
 
     /** Shortcuts above your Agility level, as the Agility plugin. */
     private static final Color HIGH_LEVEL = Color.ORANGE;
-    /** The menu options the client makes for an object under the mouse: the id and a scene tile of the object. */
-    private static final Set<MenuAction> OBJECT_OPTIONS = EnumSet.of(MenuAction.GAME_OBJECT_FIRST_OPTION, MenuAction.GAME_OBJECT_SECOND_OPTION,
-        MenuAction.GAME_OBJECT_THIRD_OPTION, MenuAction.GAME_OBJECT_FOURTH_OPTION, MenuAction.GAME_OBJECT_FIFTH_OPTION, MenuAction.EXAMINE_OBJECT,
-        MenuAction.WIDGET_TARGET_ON_GAME_OBJECT);
-
     private final Client client;
     private final HdWorldMarkersConfig config;
     /** The obstacles in the scene, with their shortcut (null: not a shortcut). */
@@ -184,8 +177,10 @@ final class AgilitySource
     private final Map<Tile, Integer> marks = new IdentityHashMap<>();
     private Tile stick;
 
+    private final MouseTargets mouse;
+
     @Inject
-    AgilitySource(Client client, HdWorldMarkersConfig config) { this.client = client; this.config = config; }
+    AgilitySource(Client client, HdWorldMarkersConfig config, MouseTargets mouse) { this.client = client; this.config = config; this.mouse = mouse; }
 
     void clear() { obstacles.clear(); marks.clear(); stick = null; }
 
@@ -267,7 +262,8 @@ final class AgilitySource
         boolean sepulchre = config.agilitySepulchreObstacles(), skilling = config.agilitySepulchreSkilling();
         Color courseColor = config.agilityColor(), portalColor = config.agilityPortalColor();
         Color markColor = config.agilityMarks() && !marks.isEmpty() ? config.agilityMarkColor() : null;
-        Set<TileObject> hovered = hovered();
+        // What is under the mouse once, not the menu per obstacle (the Hallowed Sepulchre has dozens).
+        List<MenuEntry> options = mouse.objectOptions();
         for (Map.Entry<TileObject, AgilityShortcut> entry : obstacles.entrySet())
         {
             TileObject object = entry.getKey();
@@ -289,56 +285,11 @@ final class AgilitySource
             }
             Renderable renderable = ModelTarget.renderable(object);
             if (renderable == null) { continue; }
-            if (hovered.contains(object)) { color = color.darker(); }
+            for (MenuEntry e : options) { if (mouse.names(e, object)) { color = color.darker(); break; } }
             Color fill = new Color(color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha() / 5);
             out.add(ModelTarget.object("agility:" + object.getHash(), object, renderable, ModelTarget.offsetX(object), ModelTarget.offsetY(object),
                 color, fill, 1, true, object::getClickbox));
         }
-    }
-
-    /**
-     * The obstacles under the mouse, which the Agility plugin draws darker: those the client made a menu option for (an
-     * object's id and one of its scene tiles). Each obstacle's clickbox was made every tick to see whether it held the mouse.
-     */
-    private Set<TileObject> hovered()
-    {
-        Menu menu = client.getMenu();
-        MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
-        if (entries == null || entries.length == 0) { return Collections.emptySet(); }
-        Set<TileObject> out = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (MenuEntry e : entries)
-        {
-            if (!OBJECT_OPTIONS.contains(e.getType())) { continue; }
-            for (TileObject o : obstacles.keySet())
-            {
-                if (on(o, e.getWorldViewId(), e.getParam0(), e.getParam1()) && seenAs(o, e.getIdentifier())) { out.add(o); }
-            }
-        }
-        return out;
-    }
-
-    /** Whether the object lies on this scene tile of this world view. */
-    private static boolean on(TileObject o, int worldView, int x, int y)
-    {
-        WorldView wv = o.getWorldView();
-        if (wv == null || wv.getId() != worldView) { return false; }
-        if (o instanceof GameObject)
-        {
-            Point min = ((GameObject) o).getSceneMinLocation(), max = ((GameObject) o).getSceneMaxLocation();
-            return min != null && max != null && x >= min.getX() && x <= max.getX() && y >= min.getY() && y <= max.getY();
-        }
-        LocalPoint l = o.getLocalLocation();
-        return l != null && l.getSceneX() == x && l.getSceneY() == y;
-    }
-
-    /** Whether a menu's object id is this object's, or one of the forms it takes (a multiloc). */
-    private boolean seenAs(TileObject o, int id)
-    {
-        if (o.getId() == id) { return true; }
-        ObjectComposition composition = client.getObjectDefinition(o.getId());
-        int[] impostors = composition == null ? null : composition.getImpostorIds();
-        if (impostors != null) { for (int impostor : impostors) { if (impostor == id) { return true; } } }
-        return false;
     }
 
     /** Whether there are obstacles in the scene. */

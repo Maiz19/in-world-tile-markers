@@ -38,6 +38,8 @@ class RouteFinder
      * (Path Marker's).
      */
     private static final Map<Integer, Integer> BLOCKED_SIDES = read("loc_blocking.txt"), BLOCKING_NPCS = read("npc_blocking.txt");
+    /** The objects that do not block walking, as runs of ids first=last (made from the game cache); newer objects block. */
+    private static final NavigableMap<Integer, Integer> WALKABLE = new TreeMap<>(read("loc_walkable.txt"));
     private final int[] steps = new int[SIZE * SIZE], via = new int[SIZE * SIZE], queue = new int[SIZE * SIZE];
     private final List<WorldArea> blockers = new ArrayList<>();
     private int[][] flags;
@@ -56,8 +58,6 @@ class RouteFinder
     private static final int BORDER = 6;
     /** While set (findBeyond, stepBeyond), the border and everything beyond take the extended view's flags. */
     private boolean borderless;
-    /** Whether an object of this id blocks walking; null: every object does. */
-    java.util.function.IntPredicate blocking;
 
     /** Takes the collision flags of the level you are on; false while there are none. */
     boolean load(WorldView wv)
@@ -72,7 +72,7 @@ class RouteFinder
         return true;
     }
 
-    /** Flags for the extended scene, as the client makes its own: floor, walls and objects (every object blocks here). */
+    /** Flags for the extended scene, as the client makes its own: floor, and the walls and objects that block walking. */
     private void extended(WorldView wv)
     {
         Scene scene = wv.getScene();
@@ -90,8 +90,17 @@ class RouteFinder
         {
             for (int y = 0; y < size; y++)
             {
-                if (tiles[plane][x][y] == null) { continue; }
-                ext[x][y] = settings != null && plane < settings.length && (settings[plane][x][y] & 1) != 0 ? 0x200000 : 0;
+                Tile t = tiles[plane][x][y];
+                if (t == null) { continue; }
+                // On a bridge (a pier) the floor is the level above's, as the client takes it: the water under a pier is
+                // set blocked, the pier is not.
+                boolean bridge = settings != null && settings.length > 1 && (settings[1][x][y] & 2) != 0;
+                int level = bridge ? plane + 1 : plane;
+                boolean blocked = settings != null && level < settings.length && (settings[level][x][y] & 1) != 0;
+                // Open water mostly is not set blocked, yet the game keeps you off it: a whole tile of water blocks (a
+                // shaped tile along the shore keeps its setting).
+                SceneTilePaint paint = bridge ? null : t.getSceneTilePaint();
+                ext[x][y] = blocked || paint != null && water(paint.getTexture()) ? 0x200000 : 0;
             }
         }
         Set<Object> seen = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -102,10 +111,10 @@ class RouteFinder
                 Tile t = tiles[plane][x][y];
                 if (t == null) { continue; }
                 WallObject w = t.getWallObject();
-                if (w != null && seen.add(w)) { wall(x, y, w.getConfig() & 0x1F, w.getConfig() >> 6 & 3); }
+                if (w != null && seen.add(w) && blocks(w.getId())) { wall(x, y, w.getConfig() & 0x1F, w.getConfig() >> 6 & 3); }
                 for (GameObject o : t.getGameObjects())
                 {
-                    if (o == null || !seen.add(o) || blocking != null && !blocking.test(o.getId())) { continue; }
+                    if (o == null || !seen.add(o) || !blocks(o.getId())) { continue; }
                     LocalPoint at = o.getLocalLocation();
                     if (at == null) { continue; }
                     int sw = Math.floorDiv(at.getX() - (o.sizeX() - 1) * 64, 128) + extOffset, sy = Math.floorDiv(at.getY() - (o.sizeY() - 1) * 64, 128) + extOffset;
@@ -114,6 +123,16 @@ class RouteFinder
             }
         }
     }
+
+    /** Whether an object of this id blocks walking: not in a run of WALKABLE. */
+    private static boolean blocks(int id)
+    {
+        Map.Entry<Integer, Integer> run = WALKABLE.floorEntry(id);
+        return run == null || id > run.getValue();
+    }
+
+    /** Whether a floor texture is one of the game's water textures: 1, 208 and 130 to 189. */
+    private static boolean water(int texture) { return texture == 1 || texture == 208 || texture >= 130 && texture <= 189; }
 
     /** A wall as the client flags it: shape 0 a straight wall, 1 and 3 a corner, 2 two sides; rotation 0 west, 1 north, 2 east, 3 south. */
     private void wall(int x, int y, int shape, int rotation)

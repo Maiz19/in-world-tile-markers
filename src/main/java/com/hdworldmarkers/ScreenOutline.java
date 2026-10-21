@@ -50,6 +50,30 @@ final class ScreenOutline
     }
 
     /**
+     * Ready triangles (OutlinePaint) over points {x0, y0, ...}, all at one depth: every face counts as border, drawn in
+     * the border's colour.
+     */
+    boolean buildMesh(float[] xy, int[] tris, float d)
+    {
+        int n = xy.length / 2, count = tris.length / 3;
+        if (n < 3 || count == 0) { return false; }
+        if (x.length < n) { x = new float[n * 2]; y = new float[n * 2]; depth = new float[n * 2]; }
+        if (a.length < count) { a = new int[count * 2]; b = new int[count * 2]; c = new int[count * 2]; }
+        minX = minY = Float.MAX_VALUE;
+        maxX = maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < n; i++)
+        {
+            x[i] = xy[i * 2]; y[i] = xy[i * 2 + 1]; depth[i] = d;
+            minX = Math.min(minX, x[i]); maxX = Math.max(maxX, x[i]); minY = Math.min(minY, y[i]); maxY = Math.max(maxY, y[i]);
+        }
+        int f = 0;
+        for (int t = 0; t < count; t++) { f = face(f, tris[t * 3], tris[t * 3 + 1], tris[t * 3 + 2]); }
+        vertices = n;
+        faces = borderFaces = f;
+        return true;
+    }
+
+    /**
      * The border: outer points 0..n-1 and inner points n..2n-1, mitred (limited so sharp corners do not spike), with
      * their faces and bounds. Closed, it runs round the polygon (either winding), centred on the edges or with outside
      * all outside them; open, it is a strip with square ends. Returns the winding sign.

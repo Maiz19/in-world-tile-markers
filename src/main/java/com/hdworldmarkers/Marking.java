@@ -99,6 +99,8 @@ final class Marking
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
     private static final WidgetMenuOption CLEAR = new WidgetMenuOption("Clear", "HD World Markers",
         InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    private static final WidgetMenuOption CLEAR_LINES = new WidgetMenuOption("Clear lines", "HD World Markers",
+        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
     /** The colors offered in the color menus after those in use, as RuneLite's marking plugins. */
     private static final Color[] DEFAULT_COLORS = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA};
     /** Set in a profile once the other plugins' marks and options were taken over there. */
@@ -171,7 +173,7 @@ final class Marking
 
     private void removeOptions()
     {
-        for (WidgetMenuOption option : new WidgetMenuOption[]{EXPORT, IMPORT, SYNC, CLEAR}) { menus.removeManagedCustomMenu(option); }
+        for (WidgetMenuOption option : new WidgetMenuOption[]{EXPORT, IMPORT, SYNC, CLEAR, CLEAR_LINES}) { menus.removeManagedCustomMenu(option); }
     }
 
     private void importExportOptions()
@@ -182,6 +184,7 @@ final class Marking
         menus.addManagedCustomMenu(IMPORT, e -> promptImport());
         menus.addManagedCustomMenu(SYNC, e -> sync());
         menus.addManagedCustomMenu(CLEAR, e -> promptClear());
+        menus.addManagedCustomMenu(CLEAR_LINES, e -> promptClearLines());
     }
 
     @Subscribe
@@ -349,7 +352,7 @@ final class Marking
         if (action == MenuAction.WALK || action == MenuAction.SET_HEADING)
         {
             if (config.markTiles()) { tileOptions(entry); }
-            if (config.markLines()) { lineOptions(entry); }
+            lineOptions(entry);
         }
         else if (action == MenuAction.EXAMINE_OBJECT && config.markObjects()) { objectOptions(event); }
         else if (action == MenuAction.EXAMINE_NPC && config.tagNpcs()) { npcOptions(event); }
@@ -364,11 +367,11 @@ final class Marking
         if (tile == null) { return; }
         WorldPoint point = WorldPoint.fromLocalInstance(client, tile.getLocalLocation());
         MarkerSources.TilePoint marked = tile(point);
-        client.getMenu().createMenuEntry(-1).setOption(marked != null ? "Unmark" : "Mark").setTarget(TILE)
+        client.getMenu().createMenuEntry(-1).setOption(marked != null ? "HD Unmark" : "HD Mark").setTarget(TILE)
             .setType(MenuAction.RUNELITE).onClick(e -> markTile(point));
         if (marked != null)
         {
-            client.getMenu().createMenuEntry(-2).setOption("Label").setTarget(TILE)
+            client.getMenu().createMenuEntry(-2).setOption("HD Label").setTarget(TILE)
                 .setType(MenuAction.RUNELITE).onClick(e -> labelTile(marked));
             tileColorMenu(marked);
         }
@@ -377,7 +380,7 @@ final class Marking
     /** Ground Markers' Color menu: Reset all (the region's tiles), Pick, and the colors in use. */
     private void tileColorMenu(MarkerSources.TilePoint marked)
     {
-        Menu colors = client.getMenu().createMenuEntry(-3).setOption("Color").setTarget(TILE).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu colors = client.getMenu().createMenuEntry(-3).setOption("HD Color").setTarget(TILE).setType(MenuAction.RUNELITE).createSubMenu();
         List<MarkerSources.TilePoint> region = sources.tiles(marked.regionId);
         if (region.size() > 1)
         {
@@ -419,23 +422,27 @@ final class Marking
 
     // Lines
 
-    /** Add line, and Remove line while the tile has one. */
+    /**
+     * Add line and Extend line with the Add line option, and Remove line while the tile has one, also with that option
+     * off: lines copied from Line Markers can always be taken away.
+     */
     private void lineOptions(MenuEntry entry)
     {
         WorldView wv = client.getWorldView(entry.getWorldViewId());
         Tile tile = wv == null ? null : wv.getSelectedSceneTile();
         if (tile == null) { return; }
         WorldPoint point = WorldPoint.fromLocalInstance(client, tile.getLocalLocation());
-        client.getMenu().createMenuEntry(-1).setOption("Add line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> addLine(point));
         MarkerSources.LinePoint last = lastLineOn(point);
         if (last != null)
         {
-            client.getMenu().createMenuEntry(-2).setOption("Remove line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> removeLine(last));
+            client.getMenu().createMenuEntry(-1).setOption("HD Remove line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> removeLine(last));
         }
+        if (!config.markLines()) { return; }
+        client.getMenu().createMenuEntry(-1).setOption("HD Add line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> addLine(point));
         List<WorldPoint> run = extendRun(point);
         if (run != null)
         {
-            client.getMenu().createMenuEntry(-3).setOption("Extend line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> extendLine(run));
+            client.getMenu().createMenuEntry(-3).setOption("HD Extend line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> extendLine(run));
         }
     }
 
@@ -638,6 +645,30 @@ final class Marking
             .option("Yes", () -> clientThread.invokeLater(() -> {
                 for (int region : regions) { saveTiles(region, Collections.emptyList()); }
                 message(cleared + (cleared == 1 ? " marked tile was cleared." : " marked tiles were cleared."));
+            }))
+            .option("No", () -> { })
+            .build();
+    }
+
+    /** The lines of the loaded area, after a confirmation. */
+    private void promptClearLines()
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        int[] regions = wv == null ? null : wv.getMapRegions();
+        if (regions == null) { return; }
+        int n = 0;
+        for (int region : regions) { n += sources.lines(region).size(); }
+        if (n == 0)
+        {
+            message("You have no lines to clear here.");
+            return;
+        }
+        int cleared = n;
+        chatbox.openTextMenuInput("Are you sure you want to clear the<br>" + n + " lines of this area?")
+            .option("Yes", () -> clientThread.invokeLater(() -> {
+                for (int region : regions) { saveLines(region, Collections.emptyList()); }
+                lastLine = null; extendFrom = null; extendAt = null;
+                message(cleared + (cleared == 1 ? " line was cleared." : " lines were cleared."));
             }))
             .option("No", () -> { })
             .build();
@@ -1123,7 +1154,7 @@ final class Marking
         if (object == null) { return; }
         ObjectMarkerSource.Marked marked = objects.find(object);
         client.getMenu().createMenuEntry(-1)
-            .setOption(marked != null ? "Unmark object" : "Mark object")
+            .setOption(marked != null ? "HD Unmark object" : "HD Mark object")
             .setTarget(event.getTarget())
             .setWorldViewId(entry.getWorldViewId())
             .setParam0(event.getActionParam0())
@@ -1137,7 +1168,7 @@ final class Marking
     /** Object Markers' Mark border color, Mark fill color and Mark style menus. */
     private void objectMenus(String target, TileObject object, ObjectMarkerSource.Marked marked, int[] regions)
     {
-        Menu border = client.getMenu().createMenuEntry(-2).setOption("Mark border color").setTarget(target)
+        Menu border = client.getMenu().createMenuEntry(-2).setOption("HD Mark border color").setTarget(target)
             .setType(MenuAction.RUNELITE).createSubMenu();
         for (Color c : withDefaults(objects.usedColors(regions, false), 1))
         {
@@ -1151,7 +1182,7 @@ final class Marking
             border.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.borderColor = null));
         }
 
-        Menu fill = client.getMenu().createMenuEntry(-3).setOption("Mark fill color").setTarget(target)
+        Menu fill = client.getMenu().createMenuEntry(-3).setOption("HD Mark fill color").setTarget(target)
             .setType(MenuAction.RUNELITE).createSubMenu();
         for (Color c : withDefaults(objects.usedColors(regions, true), 12))
         {
@@ -1163,7 +1194,7 @@ final class Marking
             marked.fillColor != null ? marked.fillColor : Marker.BLACK_FILL, "Mark Fill Color", c -> updateObject(object, p -> p.fillColor = c)));
         fill.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.fillColor = null));
 
-        Menu style = client.getMenu().createMenuEntry(-4).setOption("Mark style").setTarget(target)
+        Menu style = client.getMenu().createMenuEntry(-4).setOption("HD Mark style").setTarget(target)
             .setType(MenuAction.RUNELITE).createSubMenu();
         style.createMenuEntry(0).setOption("Hull").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.hull = p.hull != Boolean.TRUE));
         style.createMenuEntry(0).setOption("Outline").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.outline = p.outline != Boolean.TRUE));
@@ -1268,7 +1299,7 @@ final class Marking
         if (!pattern && (tagged || !tagStyles().isEmpty()))
         {
             client.getMenu().createMenuEntry(-1)
-                .setOption(tagged ? "Un-tag-All" : "Tag-All")
+                .setOption(tagged ? "HD Un-tag-All" : "HD Tag-All")
                 .setTarget(event.getTarget())
                 .setType(MenuAction.RUNELITE)
                 .onClick(e -> tagAll(name));
@@ -1283,7 +1314,7 @@ final class Marking
         List<String> names = MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT);
         boolean listed = names.stream().anyMatch(name::equalsIgnoreCase);
         if (!listed && names.stream().anyMatch(n -> n.contains("*") && WildcardMatcher.matches(n, name))) { return; }
-        client.getMenu().createMenuEntry(-1).setOption(listed ? "Not in front" : "In front").setTarget(target).setType(MenuAction.RUNELITE)
+        client.getMenu().createMenuEntry(-1).setOption(listed ? "HD Not in front" : "HD In front").setTarget(target).setType(MenuAction.RUNELITE)
             .onClick(e -> {
                 List<String> now = new ArrayList<>(MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT));
                 boolean removed = now.removeIf(name::equalsIgnoreCase);
@@ -1309,7 +1340,7 @@ final class Marking
         MarkerSources.NpcTag own = tags.get(Text.standardize(name));
         List<Color> used = new ArrayList<>();
         for (MarkerSources.NpcTag t : tags.values()) { offer(used, t.color); }
-        Menu colors = client.getMenu().createMenuEntry(-2).setOption("Tag color").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu colors = client.getMenu().createMenuEntry(-2).setOption("HD Tag color").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
         for (Color c : withDefaults(used, 1))
         {
             colors.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
@@ -1321,7 +1352,7 @@ final class Marking
         {
             colors.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.color = null));
         }
-        Menu styles = client.getMenu().createMenuEntry(-3).setOption("Tag style").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu styles = client.getMenu().createMenuEntry(-3).setOption("HD Tag style").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
         // Each puts the name in its style's list or takes it out.
         for (NpcStyle style : NpcStyle.values())
         {

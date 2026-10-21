@@ -45,7 +45,7 @@ final class PathTracker extends Overlay implements KeyListener
      * Options on a thing (an object, ground item, character or player): their target needs no tile under the mouse,
      * so they are routed at the click itself; until the next client tick the client shows its own flag on the thing.
      */
-    private static final Set<MenuAction> ON_A_THING = EnumSet.of(GAME_OBJECT_FIRST_OPTION, GAME_OBJECT_SECOND_OPTION,
+    static final Set<MenuAction> ON_A_THING = EnumSet.of(GAME_OBJECT_FIRST_OPTION, GAME_OBJECT_SECOND_OPTION,
         GAME_OBJECT_THIRD_OPTION, GAME_OBJECT_FOURTH_OPTION, GAME_OBJECT_FIFTH_OPTION, WIDGET_TARGET_ON_GAME_OBJECT,
         GROUND_ITEM_FIRST_OPTION, GROUND_ITEM_SECOND_OPTION, GROUND_ITEM_THIRD_OPTION, GROUND_ITEM_FOURTH_OPTION,
         GROUND_ITEM_FIFTH_OPTION, WIDGET_TARGET_ON_GROUND_ITEM, NPC_FIRST_OPTION, NPC_SECOND_OPTION, NPC_THIRD_OPTION,
@@ -144,8 +144,6 @@ final class PathTracker extends Overlay implements KeyListener
 
     void startUp()
     {
-        // Beyond the loaded area an object blocks walking when it is a thing with a name (the client's own flag is not known there).
-        routes.blocking = id -> { ObjectComposition d = client.getObjectDefinition(id); return d != null && d.getName() != null && !"null".equals(d.getName()); };
         activePath.clear(); hoverPath.clear(); predictedPath.clear();
         click = null;
         ctrl = keyActive = keyHover = pressed = false;
@@ -451,13 +449,11 @@ final class PathTracker extends Overlay implements KeyListener
     /** The menu option a click chooses: the one under the mouse in an open menu, else the left-click option. */
     private MenuEntry chosen(MenuEntry[] entries)
     {
-        Menu menu = client.getMenu();
-        Point mouse = client.getMouseCanvasPosition();
         if (client.isMenuOpen())
         {
-            // Rows of 15 pixels under a 19 pixel title, the last option at the top.
-            int y = mouse.getY() - menu.getMenuY() - 19, i = entries.length - 1 - y / 15;
-            return y >= 0 && i >= 0 && mouse.getX() > menu.getMenuX() && mouse.getX() < menu.getMenuX() + menu.getMenuWidth() ? entries[i] : entries[0];
+            // Off the options, a click closes the menu: Cancel, the first.
+            MenuEntry row = MouseTargets.row(client, entries);
+            return row != null ? row : entries[0];
         }
         int i = entries.length - 1;
         while (i > 0 && NOT_LEFT_CLICK.contains(entries[i].getType())) { i--; }
@@ -585,12 +581,13 @@ final class PathTracker extends Overlay implements KeyListener
         if (shows(false, false)) { PathLook hover = new PathLook(false, wv); each(hoverPath, false, (tile, main) -> out.add(hover.marker(tile, main))); }
         if (!shows(true, false)) { return out; }
         PathLook active = new PathLook(true, wv);
-        each(activePath, true, (tile, main) -> out.add(active.marker(tile, main)));
+        // One path: the predicted one while it is shown (its end is the destination), else the active one.
         if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(wv, guess)))
         {
             if (config.activePathDrawMode() == DrawMode.TARGET_TILE) { out.add(active.marker(guess, true)); }
             else { predict(me, guess, object); each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main))); }
         }
+        else { each(activePath, true, (tile, main) -> out.add(active.marker(tile, main))); }
         return out;
     }
 
