@@ -102,8 +102,8 @@ public interface HdWorldMarkersConfig extends Config
 
     // Text
 
-    @ConfigItem(keyName = "hdText", name = "Render text in HD (experimental)", description = "Draw the text of marks in the game world like the marks themselves, sharp in stretched mode, instead of as 2D text", position = 0, section = textSection)
-    default boolean hdText() { return false; }
+    @ConfigItem(keyName = "hdText", name = "Render text in HD", description = "Draw the text of marks in the game world like the marks themselves, sharp in stretched mode, instead of as 2D text", position = 0, section = textSection)
+    default boolean hdText() { return true; }
 
     enum TextFont
     {

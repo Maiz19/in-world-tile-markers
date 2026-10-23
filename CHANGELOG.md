@@ -13,8 +13,9 @@
 - Hulls, outlines and clickboxes of NPCs and players sit where the game draws them: they were a little too low on a dock or deck, most visible from a low camera.
 - Predicted walk in extended chunks: no longer over open water, along piers again, and around objects without a name that block walking (fences); objects that do not block walking are walked through. Which objects block is a list made from the game cache.
 - A Text section: Font (RuneScape, RuneScape bold, RuneScape small, Smooth, Smooth bold), Size, Edge (shadow, outline or none) and Edge color, for the text of marks (tile marker labels, text from other plugins).
-- Render text in HD (experimental, in the Text section): that text is drawn in the game world like the marks, sharp in stretched mode. It stays over the player, also with Player in front of marks on, and its shadow or outline never comes over it as the camera moves. It faces the camera as it turns, as 2D text, rather than leaning and lagging behind.
+- Render text in HD (in the Text section, on by default): that text is drawn in the game world like the marks, sharp in stretched mode. It stays over the player, also with Player in front of marks on, and its shadow or outline never comes over it as the camera moves. It faces the camera as it turns, as 2D text, rather than leaning and lagging behind.
 - Text and timer pies above a character move with it in every frame, as its hull does, rather than once per game cycle, so they no longer shake as it walks (in 2D too).
+- Player in front of marks: a mark that lies nearer the camera than your character everywhere, such as the hull of a chest you stand behind, is no longer cut around you (its border was cut under your robe while the rest showed). The same goes for NPCs drawn in front. A hull hangs at the nearest point of its model, so a tall tree's hull now covers you when you stand under it, as it does without Through walls.
 
 ## 1.3.1
 

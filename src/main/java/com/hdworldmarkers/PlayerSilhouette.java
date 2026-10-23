@@ -176,6 +176,34 @@ final class PlayerSilhouette
         return cut;
     }
 
+    /**
+     * How much nearer the camera than the actor a mark's face must lie, in local units, to count as in front of it: a
+     * mark hanging right at the actor's nearest point (an NPC's own hull or clickbox) is cut around it still.
+     */
+    static final float CLEARANCE = 24;
+    private final float[] nearestPoint = new float[3];
+
+    /**
+     * How near this camera the actor comes: the depth of its nearest vertex among those the silhouette is traced from
+     * (nearer than SceneShapeRenderer.PARTIAL_NEAR left out), as the marks' projections measure it; 0 for none. A mark
+     * whose face lies more than CLEARANCE nearer is in front of the actor, as a chest's hull while you stand behind the
+     * chest, and is not cut around it (SceneShapeRenderer.front).
+     */
+    synchronized float nearest(ModelShapes.Camera cam)
+    {
+        double angle = (body.orientation & 2047) * Math.PI / 1024;
+        float sin = (float) Math.sin(angle), cos = (float) Math.cos(angle);
+        float[] p = nearestPoint;
+        float nearest = Float.MAX_VALUE;
+        for (int i = 0; i < body.n; i++)
+        {
+            float rx = body.z[i] * sin + body.x[i] * cos, rz = body.z[i] * cos - body.x[i] * sin;
+            cam.project(body.localX + rx, body.localY + rz, body.height + body.y[i], p);
+            if (p[2] >= SceneShapeRenderer.PARTIAL_NEAR) { nearest = Math.min(nearest, p[2]); }
+        }
+        return nearest == Float.MAX_VALUE ? 0 : nearest;
+    }
+
     /** Leaves the actor's cells out where a wall or object nearer the camera covers them. */
     private void unseen(long[] bits, int words, int w, int h, float ox, float oy, float scale)
     {
