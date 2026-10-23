@@ -205,6 +205,9 @@ final class SceneShapeRenderer
     private static final int CUT_ROOM = 600;
     /** Scratch for a shape's cut as it is drawn, which sizes the objects (see cutCosts). */
     private final ScreenOutline sizer = new ScreenOutline();
+    /** The bit of the actor the sizer is cutting out (see front): its faces in front of that actor stay whole. */
+    private int sizerBit;
+    { sizer.whole = f -> (this.shapeFront[outline.a[f]] & this.shapeFront[outline.b[f]] & this.shapeFront[outline.c[f]] & sizerBit) != 0; }
     /** Per outline face of the shape being appended, what the player's cut makes of it (sizer.before); null for no cut. */
     private int[] shapeCut;
     private LocalPoint xrayAnchor;
@@ -1013,8 +1016,7 @@ final class SceneShapeRenderer
                 || around.minY > outline.maxY) { continue; }
             if (!loaded) { sizer.load(outline.x, outline.y, outline.depth, outline.vertices, outline.a, outline.b, outline.c, outline.faces); loaded = true; }
             // As the cutter: faces in front of this actor stay whole.
-            int bit = 1 << k;
-            sizer.whole = f -> (shapeFront[outline.a[f]] & shapeFront[outline.b[f]] & shapeFront[outline.c[f]] & bit) != 0;
+            sizerBit = 1 << k;
             sizer.cutOut(around, Integer.MAX_VALUE, Integer.MAX_VALUE);
         }
         return loaded ? sizer.costs(outline.vertices, outline.faces) : null;
