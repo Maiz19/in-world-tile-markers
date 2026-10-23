@@ -262,6 +262,13 @@ final class SceneShapeRenderer
      * XRAY_TOP_LAYER: through walls they lie a few units nearer than the top marks, still beyond 117 HD's near clip.
      */
     static final int LABEL_SHADOW_LAYER = 21, LABEL_LAYER = 22;
+
+    /**
+     * Whether the actors (the player, the NPCs put In front) are cut out of a layer: tiles only (tile markers, NPC and
+     * object tiles, paths, lines, the current and destination tile). Hulls, outlines, clickboxes and pies stay whole, as
+     * labels do: through walls they are drawn as they are, over the actors too, as the player asked (2026-10-23).
+     */
+    static boolean cutsAround(int layer) { return layer < CLICKBOX_LAYER || layer == Marker.DESTINATION || layer == Marker.CURRENT; }
     /** Appended to a marker's key for its label. */
     static final String LABEL_KEY = "\u0000label";
     /** Without through walls a label stands this much nearer than its tile, so the character on the tile is not in front of it. */
@@ -887,8 +894,8 @@ final class SceneShapeRenderer
         st.xray = xray;
         st.shared = shared;
         st.begin(layer, key);
-        // Labels stay whole over the actors, as RuneLite's text (see Bucket's cutter).
-        shapeCut = xray && layer < LABEL_SHADOW_LAYER ? cutCosts(key) : null;
+        // Only tiles are cut around the actors (cutsAround; see Bucket's cutter).
+        shapeCut = xray && cutsAround(layer) ? cutCosts(key) : null;
         append(st, layer, borderHsl, borderAlpha, fillHsl, fillAlpha);
         if (white)
         {
@@ -1646,8 +1653,8 @@ final class SceneShapeRenderer
         private List<PlayerSilhouette> frozenCuts = Collections.emptyList();
         /** Scratch for cut: the geometry as seen from a camera, cut around the player; points on the canvas, layers. */
         private final ScreenOutline cutter = new ScreenOutline();
-        // Labels are not cut around the actors: RuneLite's text lies over them.
-        { cutter.whole = f -> fl[ffa[f]] >= LABEL_SHADOW_LAYER; }
+        // Only tiles are cut around the actors (cutsAround); the rest lies over them, as RuneLite's text does.
+        { cutter.whole = f -> !cutsAround((int) fl[ffa[f]]); }
         private float[] sx = new float[0], sy = sx, sd = sx, sl = sx;
         /** The camera of the last pull in getModel; null after freeze (a new frame), so the next call pulls. */
         private ModelShapes.Camera pulled;
