@@ -212,14 +212,14 @@ final class PlayerSilhouette
         Arrays.fill(near, 0, cells, 0);
         float nearest = 0;
         for (int i = 0; i < body.n; i++) { if (body.pd[i] > 0 && !Float.isNaN(body.px[i])) { nearest = Math.max(nearest, 1 / body.pd[i]); } }
-        cover(body, w, h, ox, oy, scale, (cell, inverse) -> { if (inverse > near[cell]) { near[cell] = inverse; } });
+        cover(body, camera, w, h, ox, oy, scale, (cell, inverse) -> { if (inverse > near[cell]) { near[cell] = inverse; } });
         // A cell of the raster no face centre fell in (an edge) counts as at the actor's nearest point.
         float fallback = nearest;
         for (int i = 0; i < occluders.count; i++)
         {
             Shape s = occluders.shapes.get(i);
             float margin = s.margin;
-            cover(s, w, h, ox, oy, scale, (cell, inverse) -> {
+            cover(s, camera, w, h, ox, oy, scale, (cell, inverse) -> {
                 int column = cell % w, word = cell / w * words + (column >>> 6);
                 long bit = 1L << (column & 63);
                 if ((bits[word] & bit) == 0) { return; }
@@ -232,35 +232,88 @@ final class PlayerSilhouette
 
     private interface CellVisit { void at(int cell, float inverse); }
 
-    /** Calls back for every raster cell whose centre one of the shape's faces covers, with 1 / depth there (flat faces). */
-    private static void cover(Shape s, int w, int h, float ox, float oy, float scale, CellVisit visit)
+    /** Nearer than this the renderers draw nothing (117 HD clips at twice its near plane): a face is cut off there. */
+    private static final float NEAR = 2 * ModelShapes.NEAR;
+
+    /**
+     * Calls back for every raster cell whose centre one of the shape's faces covers, with 1 / depth there (flat faces).
+     * A face reaching nearer the camera than NEAR is clipped there first, as the renderers clip it: projecting a corner
+     * that near throws the face's canvas triangle far out, and it covered the actor where the renderers draw nothing of
+     * it (a railing post beside a low camera wiped the silhouette, so the marks came over the actor).
+     */
+    private static void cover(Shape s, ModelShapes.Camera cam, int w, int h, float ox, float oy, float scale, CellVisit visit)
     {
+        float[] poly = new float[12], view = new float[9];
         for (int f = 0; f < s.faces; f++)
         {
             if (s.hidden[f]) { continue; }
             int i = s.a[f], j = s.b[f], k = s.c[f];
-            float x0 = (s.px[i] - ox) * scale, y0 = (s.py[i] - oy) * scale, x1 = (s.px[j] - ox) * scale, y1 = (s.py[j] - oy) * scale;
-            float x2 = (s.px[k] - ox) * scale, y2 = (s.py[k] - oy) * scale;
-            if (Float.isNaN(x0 + x1 + x2) || !(s.pd[i] > 0 && s.pd[j] > 0 && s.pd[k] > 0)) { continue; }
-            float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
-            if (Math.abs(area) < 1e-6f) { continue; }
-            int cx0 = Math.max(0, (int) Math.ceil(Math.min(x0, Math.min(x1, x2)) - 0.5f)), cx1 = Math.min(w - 1, (int) Math.floor(Math.max(x0, Math.max(x1, x2)) - 0.5f));
-            int cy0 = Math.max(0, (int) Math.ceil(Math.min(y0, Math.min(y1, y2)) - 0.5f)), cy1 = Math.min(h - 1, (int) Math.floor(Math.max(y0, Math.max(y1, y2)) - 0.5f));
-            if (cx0 > cx1 || cy0 > cy1) { continue; }
-            // 1 / depth is linear across the canvas for a flat face.
-            float w0 = 1 / s.pd[i], w1 = 1 / s.pd[j], w2 = 1 / s.pd[k];
-            float dx = ((w1 - w0) * (y2 - y0) - (w2 - w0) * (y1 - y0)) / area, dy = ((x1 - x0) * (w2 - w0) - (x2 - x0) * (w1 - w0)) / area;
-            float sign = Math.signum(area);
-            for (int cy = cy0; cy <= cy1; cy++)
+            if (Float.isNaN(s.px[i] + s.px[j] + s.px[k]) || !(s.pd[i] > 0 && s.pd[j] > 0 && s.pd[k] > 0)) { continue; }
+            int n;
+            if (s.pd[i] >= NEAR && s.pd[j] >= NEAR && s.pd[k] >= NEAR)
             {
-                float py = cy + 0.5f;
-                for (int cx = cx0; cx <= cx1; cx++)
+                n = 3;
+                int[] v = {i, j, k};
+                for (int q = 0; q < 3; q++) { poly[q * 3] = s.px[v[q]]; poly[q * 3 + 1] = s.py[v[q]]; poly[q * 3 + 2] = 1 / s.pd[v[q]]; }
+            }
+            else
+            {
+                // In view space (x right, y down, depth), where edges stay straight, the part at depth >= NEAR.
+                int[] v = {i, j, k};
+                for (int q = 0; q < 3; q++)
                 {
-                    float px = cx + 0.5f;
-                    if (sign * ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) < 0 || sign * ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) < 0
-                        || sign * ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) < 0) { continue; }
-                    visit.at(cy * w + cx, w0 + (px - x0) * dx + (py - y0) * dy);
+                    float d = s.pd[v[q]];
+                    view[q * 3] = (s.px[v[q]] - cam.centerX) * d / cam.scale; view[q * 3 + 1] = (s.py[v[q]] - cam.centerY) * d / cam.scale; view[q * 3 + 2] = d;
                 }
+                n = 0;
+                for (int q = 0; q < 3; q++)
+                {
+                    int r = (q + 1) % 3;
+                    float da = view[q * 3 + 2], db = view[r * 3 + 2];
+                    if (da >= NEAR) { n = put(poly, n, cam, view[q * 3], view[q * 3 + 1], da); }
+                    if ((da >= NEAR) != (db >= NEAR))
+                    {
+                        float t = (NEAR - da) / (db - da);
+                        n = put(poly, n, cam, view[q * 3] + (view[r * 3] - view[q * 3]) * t, view[q * 3 + 1] + (view[r * 3 + 1] - view[q * 3 + 1]) * t, NEAR);
+                    }
+                }
+                if (n < 3) { continue; }
+            }
+            for (int t = 1; t + 1 < n; t++)
+            {
+                triangle((poly[0] - ox) * scale, (poly[1] - oy) * scale, poly[2], (poly[t * 3] - ox) * scale, (poly[t * 3 + 1] - oy) * scale, poly[t * 3 + 2],
+                    (poly[t * 3 + 3] - ox) * scale, (poly[t * 3 + 4] - oy) * scale, poly[t * 3 + 5], w, h, visit);
+            }
+        }
+    }
+
+    /** Adds a view-space point to the polygon as its canvas point and 1 / depth; returns the new count. */
+    private static int put(float[] poly, int n, ModelShapes.Camera cam, float vx, float vy, float d)
+    {
+        poly[n * 3] = cam.centerX + vx * cam.scale / d; poly[n * 3 + 1] = cam.centerY + vy * cam.scale / d; poly[n * 3 + 2] = 1 / d;
+        return n + 1;
+    }
+
+    /** Visits the cells a triangle (raster coordinates, 1 / depth per corner) covers. */
+    private static void triangle(float x0, float y0, float w0, float x1, float y1, float w1, float x2, float y2, float w2, int w, int h, CellVisit visit)
+    {
+        float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+        if (Math.abs(area) < 1e-6f) { return; }
+        int cx0 = Math.max(0, (int) Math.ceil(Math.min(x0, Math.min(x1, x2)) - 0.5f)), cx1 = Math.min(w - 1, (int) Math.floor(Math.max(x0, Math.max(x1, x2)) - 0.5f));
+        int cy0 = Math.max(0, (int) Math.ceil(Math.min(y0, Math.min(y1, y2)) - 0.5f)), cy1 = Math.min(h - 1, (int) Math.floor(Math.max(y0, Math.max(y1, y2)) - 0.5f));
+        if (cx0 > cx1 || cy0 > cy1) { return; }
+        // 1 / depth is linear across the canvas for a flat face.
+        float dx = ((w1 - w0) * (y2 - y0) - (w2 - w0) * (y1 - y0)) / area, dy = ((x1 - x0) * (w2 - w0) - (x2 - x0) * (w1 - w0)) / area;
+        float sign = Math.signum(area);
+        for (int cy = cy0; cy <= cy1; cy++)
+        {
+            float py = cy + 0.5f;
+            for (int cx = cx0; cx <= cx1; cx++)
+            {
+                float px = cx + 0.5f;
+                if (sign * ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) < 0 || sign * ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) < 0
+                    || sign * ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) < 0) { continue; }
+                visit.at(cy * w + cx, w0 + (px - x0) * dx + (py - y0) * dy);
             }
         }
     }
