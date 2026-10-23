@@ -15,8 +15,7 @@
 - A Text section: Font (RuneScape, RuneScape bold, RuneScape small, Smooth, Smooth bold), Size, Edge (shadow, outline or none) and Edge color, for the text of marks (tile marker labels, text from other plugins).
 - Render text in HD (in the Text section, on by default): that text is drawn in the game world like the marks, sharp in stretched mode. It stays over the player, also with Player in front of marks on, and its shadow or outline never comes over it as the camera moves. It faces the camera as it turns, as 2D text, rather than leaning and lagging behind.
 - Text and timer pies above a character move with it in every frame, as its hull does, rather than once per game cycle, so they no longer shake as it walks (in 2D too).
-- Player in front of marks: a mark that lies nearer the camera than your character everywhere, such as the hull of a chest you stand behind, is no longer cut around you (its border was cut under your robe while the rest showed). The same goes for NPCs drawn in front. A hull hangs at the nearest point of its model, so a tall tree's hull now covers you when you stand under it, as it does without Through walls.
-- Player in front of marks: a railing or post beside a low camera no longer wipes your character out of the marks (its part nearer than the game draws threw its shape across the screen, so the marks came over you).
+- Player in front of marks: your character is cut out of the marks whole, also where a post, wall or chest hides part of it. Marks showed over those hidden parts, so a mark looked cut away in one place and not in another.
 
 ## 1.3.1
 
