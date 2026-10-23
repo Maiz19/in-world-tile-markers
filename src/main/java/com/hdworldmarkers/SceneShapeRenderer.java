@@ -177,6 +177,9 @@ final class SceneShapeRenderer
     private final PlayerSilhouette playerShape = new PlayerSilhouette();
     private final Map<NPC, PlayerSilhouette> npcShapes = new IdentityHashMap<>();
     private final PlayerSilhouette.Occluders occluders = new PlayerSilhouette.Occluders();
+    /** The actors cut out this frame, which are no occluders of each other, and the objects and tiles looked at for occluders. */
+    private final Set<Object> cutActors = Collections.newSetFromMap(new IdentityHashMap<>()), occludersTaken = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<Long> occluderTiles = new HashSet<>();
     /** Actors cut out at most per frame (the player and the NPCs put In front): each costs a trace and more faces under it. */
     static final int MAX_CUTS = 9;
     /**
@@ -202,6 +205,9 @@ final class SceneShapeRenderer
     private static final int CUT_ROOM = 600;
     /** Scratch for a shape's cut as it is drawn, which sizes the objects (see cutCosts). */
     private final ScreenOutline sizer = new ScreenOutline();
+    /** The sizer's pass, as Bucket.cutPass: 1 the border (fills whole), 2 the fill (borders whole). */
+    private int sizerPass;
+    { sizer.whole = f -> sizerPass == 1 ? f >= outline.borderFaces : f < outline.borderFaces; }
     /** Per outline face of the shape being appended, what the player's cut makes of it (sizer.before); null for no cut. */
     private int[] shapeCut;
     private LocalPoint xrayAnchor;
@@ -269,6 +275,12 @@ final class SceneShapeRenderer
      * labels do: through walls they are drawn as they are, over the actors too, as the player asked (2026-10-23).
      */
     static boolean cutsAround(int layer) { return layer < CLICKBOX_LAYER || layer == Marker.DESTINATION || layer == Marker.CURRENT; }
+
+    /**
+     * Whether a layer is drawn through walls (with Through walls on): tiles and labels. Hulls, outlines, clickboxes and
+     * pies sit in the world at their own depth, hidden by what stands in front of them, the player too (2026-10-23).
+     */
+    static boolean throughWalls(int layer) { return cutsAround(layer) || layer >= LABEL_SHADOW_LAYER; }
     /** Appended to a marker's key for its label. */
     static final String LABEL_KEY = "\u0000label";
     /** Without through walls a label stands this much nearer than its tile, so the character on the tile is not in front of it. */
@@ -854,9 +866,10 @@ final class SceneShapeRenderer
      */
     private boolean draw(String key, LocalPoint anchor, int level, Color border, Color fill, boolean hasBorder)
     {
-        // Through walls applies to every shape, tiles as well as hulls, clickboxes and outlines: all of them
-        // then sit at the same place in front of the camera, so lighting renderers (117 HD: shadows, fog,
-        // lights) shade them all alike.
+        // Through walls applies to tiles and labels (throughWalls): they sit at the same place in front of the camera,
+        // so lighting renderers (117 HD: shadows, fog, lights) shade them all alike. Hulls, outlines, clickboxes and
+        // pies stay in the world.
+        boolean xray = this.xray && throughWalls(layer);
         // World points of the shape: on the ground for through walls (moved to the camera at draw time),
         // else just above it towards the camera. Later layers slightly nearer, so shapes never z-fight.
         place(xray, false);
@@ -971,6 +984,7 @@ final class SceneShapeRenderer
             if (alpha <= 0) { continue; }
             int k = b.faces++;
             b.fa[k] = first + outline.a[f]; b.fb[k] = first + outline.b[f]; b.fc[k] = first + outline.c[f];
+            b.border[k] = isBorder;
             b.color[k] = isBorder ? borderHsl : fillHsl;
             b.alpha[k] = alpha;
             // What the player's cut makes of the face, with half as much again to grow as the camera moves.
@@ -1010,11 +1024,15 @@ final class SceneShapeRenderer
         boolean loaded = false;
         for (PlayerSilhouette s : cuts)
         {
-            PlayerCut around = s.estimate(camera);
-            if (around == null || around.maxX < outline.minX || around.minX > outline.maxX || around.maxY < outline.minY
-                || around.minY > outline.maxY) { continue; }
-            if (!loaded) { sizer.load(outline.x, outline.y, outline.depth, outline.vertices, outline.a, outline.b, outline.c, outline.faces); loaded = true; }
-            sizer.cutOut(around, Integer.MAX_VALUE, Integer.MAX_VALUE);
+            // As the cutter: the border by the whole silhouette, the fill by the seen one.
+            for (sizerPass = 1; sizerPass <= 2; sizerPass++)
+            {
+                PlayerCut around = sizerPass == 1 ? s.estimate(camera) : s.estimateVisible(camera);
+                if (around == null || around.maxX < outline.minX || around.minX > outline.maxX || around.maxY < outline.minY
+                    || around.minY > outline.maxY) { continue; }
+                if (!loaded) { sizer.load(outline.x, outline.y, outline.depth, outline.vertices, outline.a, outline.b, outline.c, outline.faces); loaded = true; }
+                sizer.cutOut(around, Integer.MAX_VALUE, Integer.MAX_VALUE);
+            }
         }
         return loaded ? sizer.costs(outline.vertices, outline.faces) : null;
     }
@@ -1287,7 +1305,7 @@ final class SceneShapeRenderer
                     b.ensure(b.vertices + 3, b.faces + 1);
                     int to = b.faces++;
                     b.fa[to] = copy(st, st.fa[f], b); b.fb[to] = copy(st, st.fb[f], b); b.fc[to] = copy(st, st.fc[f], b);
-                    b.color[to] = st.color[f]; b.alpha[to] = st.alpha[f];
+                    b.color[to] = st.color[f]; b.alpha[to] = st.alpha[f]; b.border[to] = st.border[f];
                     b.needVertices += fv;
                     b.needFaces += ff;
                 }
@@ -1306,7 +1324,7 @@ final class SceneShapeRenderer
             {
                 int to = b.faces++;
                 b.fa[to] = st.fa[f] + shift; b.fb[to] = st.fb[f] + shift; b.fc[to] = st.fc[f] + shift;
-                b.color[to] = st.color[f]; b.alpha[to] = st.alpha[f];
+                b.color[to] = st.color[f]; b.alpha[to] = st.alpha[f]; b.border[to] = st.border[f];
             }
             b.vertices += nv;
         }
@@ -1459,9 +1477,12 @@ final class SceneShapeRenderer
             if (actors.size() >= MAX_CUTS) { break; }
             if (n != null && n.getWorldView() == top && n.getLocalLocation() != null) { actors.add(n); }
         }
-        // The ground around the actors, which hides a model's soles: the marks are not cut under the feet.
+        // Where a wall or object nearer the camera covers an actor, it is not seen there: the fills are not cut there
+        // (PlayerSilhouette.visibleCut). Taken before the actors' models, which can share their arrays with the objects'.
         occluders.clear();
-        for (Actor a : actors) { ground(a, a.getLocalLocation()); }
+        cutActors.clear(); occludersTaken.clear(); occluderTiles.clear();
+        cutActors.addAll(actors);
+        for (Actor a : actors) { occluders(a, a.getLocalLocation()); ground(a, a.getLocalLocation()); }
         List<PlayerSilhouette> taken = new ArrayList<>(actors.size());
         Set<NPC> kept = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Actor a : actors)
@@ -1476,6 +1497,36 @@ final class SceneShapeRenderer
         // An NPC no longer In front, or gone: its silhouette and arrays with it.
         npcShapes.keySet().retainAll(kept);
         cuts = taken;
+    }
+
+    /**
+     * The walls and objects that may stand between the camera and an actor (and the other actors the client keeps as
+     * objects on their tiles): those on the tiles along the way from the camera to the actor and beside them.
+     */
+    private void occluders(Actor a, LocalPoint at)
+    {
+        int plane = a.getWorldView().getPlane();
+        Scene scene = client.getTopLevelWorldView().getScene();
+        Tile[][][] levels = scene == null ? null : scene.getTiles();
+        if (levels == null || plane < 0 || plane >= levels.length) { return; }
+        Tile[][] tiles = levels[plane];
+        float dx = at.getX() - camera.x, dy = at.getY() - camera.y;
+        int steps = (int) (Math.hypot(dx, dy) / 64) + 1;
+        for (int i = 0; i <= steps; i++)
+        {
+            int cx = (int) (camera.x + dx * i / steps) >> 7, cy = (int) (camera.y + dy * i / steps) >> 7;
+            for (int tx = cx - 1; tx <= cx + 1; tx++)
+            {
+                for (int ty = cy - 1; ty <= cy + 1; ty++)
+                {
+                    if (tx < 0 || ty < 0 || tx >= tiles.length || ty >= tiles[tx].length || tiles[tx][ty] == null || !occluderTiles.add((long) tx << 32 | ty)) { continue; }
+                    Tile t = tiles[tx][ty];
+                    WallObject w = t.getWallObject();
+                    if (w != null && occludersTaken.add(w)) { occluder(w.getRenderable1(), 0, w); occluder(w.getRenderable2(), 0, w); }
+                    for (GameObject o : t.getGameObjects()) { if (o != null && occludersTaken.add(o)) { occluder(o.getRenderable(), o.getModelOrientation(), o); } }
+                }
+            }
+        }
     }
 
     /** Scratch for ground: the tiles around an actor as faces. */
@@ -1515,6 +1566,15 @@ final class SceneShapeRenderer
         occluders.addGround(gx, gy, gz, points, ga, gb, gc, faces);
     }
 
+    /** A wall's or object's model as an occluder; the actors cut out are none for each other. */
+    private void occluder(Renderable r, int orientation, TileObject o)
+    {
+        if (r == null || cutActors.contains(r)) { return; }
+        Model m = r instanceof Model ? (Model) r : r.getModel();
+        LocalPoint at = o.getLocalLocation();
+        if (m != null && at != null) { occluders.add(m, at.getX(), at.getY(), o.getZ(), orientation); }
+    }
+
     /** Whether the shape with this key is in the scene this frame. */
     boolean drawn(String key) { return !unavailable && appended.contains(key); }
 
@@ -1540,6 +1600,8 @@ final class SceneShapeRenderer
         /** Per vertex of a label, its place in canvas pixels from where its point {ax, ay, az} projects; ox NaN for others. */
         float[] ox = new float[64], oy = new float[64], ax = new float[64], ay = new float[64], az = new float[64];
         int[] fa = new int[96], fb = new int[96], fc = new int[96], color = new int[96], alpha = new int[96];
+        /** Per face, whether it is of the shape's border (else its fill): the border is cut around the whole actor, the fill around what is seen. */
+        boolean[] border = new boolean[96];
         int vertices, faces;
         boolean xray, shared;
 
@@ -1559,6 +1621,7 @@ final class SceneShapeRenderer
             {
                 int n = faceCount * 2;
                 fa = Arrays.copyOf(fa, n); fb = Arrays.copyOf(fb, n); fc = Arrays.copyOf(fc, n);
+                border = Arrays.copyOf(border, n);
                 color = Arrays.copyOf(color, n); alpha = Arrays.copyOf(alpha, n);
             }
         }
@@ -1649,12 +1712,15 @@ final class SceneShapeRenderer
         private int frozenVertices, fAnchorX, fAnchorY, fAnchorZ;
         /** The faces written with them (vertex indices, colour, alpha), and the actors whose silhouettes they leave out. */
         private int[] ffa = new int[0], ffb = ffa, ffc = ffa, fColor = ffa, fAlpha = ffa;
+        private boolean[] fBorder = new boolean[0];
         private int frozenFaces;
         private List<PlayerSilhouette> frozenCuts = Collections.emptyList();
         /** Scratch for cut: the geometry as seen from a camera, cut around the player; points on the canvas, layers. */
         private final ScreenOutline cutter = new ScreenOutline();
+        /** The pass of the cut: 1 the border around the whole actor (fills stay whole), 2 the fill around what is seen (borders stay whole). */
+        private int cutPass;
         // Only tiles are cut around the actors (cutsAround); the rest lies over them, as RuneLite's text does.
-        { cutter.whole = f -> !cutsAround((int) fl[ffa[f]]); }
+        { cutter.whole = f -> !cutsAround((int) fl[ffa[f]]) || (cutPass == 1 ? !fBorder[f] : fBorder[f]); }
         private float[] sx = new float[0], sy = sx, sd = sx, sl = sx;
         /** The camera of the last pull in getModel; null after freeze (a new frame), so the next call pulls. */
         private ModelShapes.Camera pulled;
@@ -1680,7 +1746,8 @@ final class SceneShapeRenderer
             System.arraycopy(ax, 0, fax, 0, vertices); System.arraycopy(ay, 0, fay, 0, vertices); System.arraycopy(az, 0, faz, 0, vertices);
             labels = false;
             for (int i = 0; i < vertices && !labels; i++) { labels = !Float.isNaN(ox[i]); }
-            if (ffa.length < faces) { ffa = new int[fa.length]; ffb = new int[fa.length]; ffc = new int[fa.length]; fColor = new int[fa.length]; fAlpha = new int[fa.length]; }
+            if (ffa.length < faces) { ffa = new int[fa.length]; ffb = new int[fa.length]; ffc = new int[fa.length]; fColor = new int[fa.length]; fAlpha = new int[fa.length]; fBorder = new boolean[fa.length]; }
+            System.arraycopy(border, 0, fBorder, 0, faces);
             System.arraycopy(fa, 0, ffa, 0, faces); System.arraycopy(fb, 0, ffb, 0, faces); System.arraycopy(fc, 0, ffc, 0, faces);
             System.arraycopy(color, 0, fColor, 0, faces); System.arraycopy(alpha, 0, fAlpha, 0, faces);
             frozenModel = model; frozenVertices = vertices; frozenFaces = faces; frozenCuts = cuts;
@@ -1713,8 +1780,12 @@ final class SceneShapeRenderer
             o.load(sx, sy, sd, n, ffa, ffb, ffc, frozenFaces);
             for (PlayerSilhouette s : frozenCuts)
             {
-                PlayerCut around = s.cut(cam);
-                if (around != null) { o.cutOut(around, m.getVerticesCount(), m.getFaceCount()); }
+                // The border around the whole actor, hidden parts too; the fill only around what is seen of it.
+                PlayerCut whole = s.cut(cam), seen = s.visibleCut(cam);
+                cutPass = 1;
+                if (whole != null) { o.cutOut(whole, m.getVerticesCount(), m.getFaceCount()); }
+                cutPass = 2;
+                if (seen != null) { o.cutOut(seen, m.getVerticesCount(), m.getFaceCount()); }
             }
             // The layer of every point: that of the face it was cut from.
             if (sl.length < o.vertices) { sl = new float[o.vertices * 2]; }

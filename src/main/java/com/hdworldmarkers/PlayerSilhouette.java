@@ -9,24 +9,30 @@ import net.runelite.api.Model;
  * An actor's model (the local player's, or an NPC's put In front) as the client draws it this frame, copied (the
  * client's models share their arrays), and the part of the canvas it covers with the camera the client draws with: its
  * front faces, as Improved Tile Indicators clears them from its overlay, traced into a silhouette. Marks drawn through
- * walls leave that out, so the actor stands in front of them (SceneShapeRenderer.Bucket.pullToCamera), the whole of it:
- * also where a wall, post or chest hides part of it, as the player asked (2026-10-23). Only what lies under the ground
- * (a model's soles) is left out, so the marks are not cut under the feet.
+ * walls leave that out, so the actor stands in front of them (SceneShapeRenderer.Bucket.pullToCamera): their borders
+ * around the whole actor, hidden parts too (no border runs over the actor behind a post), their fills only around what
+ * is seen of it (visibleCut: a hole in a fill over the post showed the actor's shape). Where a wall or object nearer the
+ * camera covers the actor, that part is left out of the seen silhouette.
  */
 final class PlayerSilhouette
 {
     private final Shape body = new Shape();
-    /** The ground of this frame around the actors, shared by their silhouettes. */
+    /** The walls and objects of this frame that may stand between the camera and the actors, shared by their silhouettes. */
     private Occluders occluders;
     private final Silhouette.Scratch scratch = new Silhouette.Scratch();
     /** Per raster cell, 1 / depth of the player's nearest face there; 0 for none. */
     private float[] near = new float[0];
     private ModelShapes.Camera camera, lastCamera;
     private PlayerCut cut, lastCut;
-    /** Ground faces taken at most. */
+    /** As cut and lastCut, of the seen part only. */
+    private PlayerCut visibleCut, lastVisibleCut;
+    /** Faces of walls and objects taken at most: their models are copied every frame and projected for the cut. */
     static final int MAX_OCCLUDER_FACES = 20000;
-    /** How much nearer the camera than the actor the ground must be to hide what lies under it (a model's soles), in local units. */
-    private static final float GROUND_IN_FRONT = 1;
+    /**
+     * How much nearer the camera than the actor a wall or object must be to hide it, in local units; the ground, which
+     * is no part of any actor, hides what lies under it (a model's soles, a few units down) by a unit.
+     */
+    private static final float IN_FRONT = 8, GROUND_IN_FRONT = 1;
 
     /** A model where it stands, copied, and as projected with the last camera. */
     private static final class Shape
@@ -35,8 +41,8 @@ final class PlayerSilhouette
         int[] a = new int[0], b = a, c = a;
         boolean[] skip = new boolean[0], hidden = skip;
         int n, faces, localX, localY, height, orientation;
-        /** The ground around an actor (take with faces), which hides from either side, rather than an actor's model. */
-        boolean ground;
+        /** As an occluder: how much nearer than the actor it must be to hide it. */
+        float margin = IN_FRONT;
 
         /** Copies the model; false when it has nothing to draw. */
         boolean take(Model model, int localX, int localY, int height, int orientation)
@@ -62,7 +68,7 @@ final class PlayerSilhouette
                 if (skip[f]) { a[f] = b[f] = c[f] = 0; }
             }
             this.localX = localX; this.localY = localY; this.height = height; this.orientation = orientation;
-            ground = false;
+            margin = IN_FRONT;
             return true;
         }
 
@@ -77,7 +83,7 @@ final class PlayerSilhouette
             System.arraycopy(fa, 0, a, 0, faces); System.arraycopy(fb, 0, b, 0, faces); System.arraycopy(fc, 0, c, 0, faces);
             Arrays.fill(skip, 0, faces, false);
             localX = 0; localY = 0; height = 0; orientation = 0;
-            ground = true;
+            margin = GROUND_IN_FRONT;
             return true;
         }
 
@@ -88,8 +94,8 @@ final class PlayerSilhouette
         void project(ModelShapes.Camera cam, float near)
         {
             ModelShapes.projectModel(cam, x, y, z, n, localX, localY, height, orientation, px, py, pd, near);
-            // The ground hides from either side; a model's faces turned away are not drawn.
-            boolean both = ground;
+            // The ground (margin GROUND_IN_FRONT) hides from either side; a model's faces turned away are not drawn.
+            boolean both = margin == GROUND_IN_FRONT;
             for (int f = 0; f < faces; f++)
             {
                 int i = a[f], j = b[f], k = c[f];
@@ -98,15 +104,24 @@ final class PlayerSilhouette
         }
     }
 
-    /** The ground around the actors this frame, copied and projected once for all of them. */
+    /** The walls and objects that may stand between the camera and the actors this frame, copied and projected once for all of them. */
     static final class Occluders
     {
         private final List<Shape> shapes = new ArrayList<>();
         private int count, faces;
         private ModelShapes.Camera camera;
 
-        /** Leaves out last frame's ground; this frame's comes with addGround, before the actors' models are taken. */
+        /** Leaves out last frame's walls and objects; this frame's come with add, before the actors' models are taken. */
         synchronized void clear() { count = 0; faces = 0; camera = null; }
+
+        /** A wall's or object's model where it stands, which may hide part of an actor; false once there is no room left. */
+        synchronized boolean add(Model model, int localX, int localY, int height, int orientation)
+        {
+            if (faces + model.getFaceCount() > MAX_OCCLUDER_FACES) { return false; }
+            if (count == shapes.size()) { shapes.add(new Shape()); }
+            if (shapes.get(count).take(model, localX, localY, height, orientation)) { faces += model.getFaceCount(); count++; }
+            return true;
+        }
 
         /** The ground's faces (model points: x, height as y, z) around an actor, which hide what lies under it; false once there is no room left. */
         synchronized boolean addGround(float[] mx, float[] my, float[] mz, int n, int[] fa, int[] fb, int[] fc, int faceCount)
@@ -117,7 +132,11 @@ final class PlayerSilhouette
             return true;
         }
 
-        /** Projects it with this camera, once per camera; faces reaching nearer than the renderers draw are clipped there (cover). */
+        /**
+         * Projects them with this camera, once per camera. Walls and objects right at the camera too: a face with a corner
+         * nearer than the renderers draw still covers the actor with the rest of it (only corners behind the camera are
+         * left out, with their faces).
+         */
         synchronized void project(ModelShapes.Camera cam)
         {
             if (cam.same(camera)) { return; }
@@ -131,9 +150,10 @@ final class PlayerSilhouette
     {
         if (!body.take(model, localX, localY, height, orientation)) { return false; }
         this.occluders = occluders;
-        if (cut != null) { lastCamera = camera; lastCut = cut; }
+        if (cut != null) { lastCamera = camera; lastCut = cut; lastVisibleCut = visibleCut; }
         camera = null;
         cut = null;
+        visibleCut = null;
         return true;
     }
 
@@ -146,7 +166,20 @@ final class PlayerSilhouette
         return cam.same(lastCamera) && cut == null ? lastCut : cut(cam);
     }
 
-    /** The silhouette as drawn with this camera, traced once per camera; null when nothing of it projects. */
+    /** As estimate, of the seen part only. */
+    synchronized PlayerCut estimateVisible(ModelShapes.Camera cam)
+    {
+        return cam.same(lastCamera) && cut == null ? lastVisibleCut : visibleCut(cam);
+    }
+
+    /** As cut, of the seen part only: what a wall or object nearer the camera covers is left out. */
+    synchronized PlayerCut visibleCut(ModelShapes.Camera cam)
+    {
+        cut(cam);
+        return visibleCut;
+    }
+
+    /** The whole silhouette as drawn with this camera, traced once per camera (with visibleCut); null when nothing of it projects. */
     synchronized PlayerCut cut(ModelShapes.Camera cam)
     {
         if (cam.same(camera)) { return cut; }
@@ -154,13 +187,17 @@ final class PlayerSilhouette
         body.project(cam, SceneShapeRenderer.PARTIAL_NEAR);
         boolean occluded = occluders != null && occluders.count > 0;
         if (occluded) { occluders.project(cam); }
-        // The cell staircase, not the exact edge: a cell of precision does not show in the cut, made every frame.
-        cut = PlayerCut.of(Silhouette.trace(body.px, body.py, body.a, body.b, body.c, body.faces, body.hidden, scratch, false,
-            occluded ? this::unseen : null));
+        // The cell staircase, not the exact edge: a cell of precision does not show in the cut, made every frame. Both
+        // silhouettes from one raster: the whole one, and the one with what the walls and objects cover left out.
+        List<float[]> whole = occluded ? new ArrayList<>() : null;
+        List<float[]> seen = Silhouette.trace(body.px, body.py, body.a, body.b, body.c, body.faces, body.hidden, scratch, false,
+            occluded ? this::unseen : null, whole);
+        cut = PlayerCut.of(occluded ? whole : seen);
+        visibleCut = occluded ? PlayerCut.of(seen) : cut;
         return cut;
     }
 
-    /** Leaves the actor's cells out where the ground nearer the camera covers them (a model's soles). */
+    /** Leaves the actor's cells out where a wall or object nearer the camera covers them. */
     private void unseen(long[] bits, int words, int w, int h, float ox, float oy, float scale)
     {
         int cells = w * h;
@@ -174,7 +211,7 @@ final class PlayerSilhouette
         for (int i = 0; i < occluders.count; i++)
         {
             Shape s = occluders.shapes.get(i);
-            float margin = GROUND_IN_FRONT;
+            float margin = s.margin;
             cover(s, camera, w, h, ox, oy, scale, (cell, inverse) -> {
                 int column = cell % w, word = cell / w * words + (column >>> 6);
                 long bit = 1L << (column & 63);
@@ -195,7 +232,7 @@ final class PlayerSilhouette
      * Calls back for every raster cell whose centre one of the shape's faces covers, with 1 / depth there (flat faces).
      * A face reaching nearer the camera than NEAR is clipped there first, as the renderers clip it: projecting a corner
      * that near throws the face's canvas triangle far out, and it covered the actor where the renderers draw nothing of
-     * it.
+     * it (a railing post beside a low camera wiped the silhouette, so the marks came over the actor).
      */
     private static void cover(Shape s, ModelShapes.Camera cam, int w, int h, float ox, float oy, float scale, CellVisit visit)
     {

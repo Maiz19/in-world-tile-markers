@@ -77,6 +77,13 @@ final class Silhouette
     static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
         Mask mask)
     {
+        return trace(x, y, a, b, c, faces, hidden, scratch, exact, mask, null);
+    }
+
+    /** As trace with a mask; the loops as they were before the mask go into unmasked (when given), from the same raster. */
+    static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
+        Mask mask, List<float[]> unmasked)
+    {
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (int f = 0; f < faces; f++)
         {
@@ -149,25 +156,41 @@ final class Silhouette
                     (x[c[f]] - ox) * scale, (y[c[f]] - oy) * scale, scratch, exact);
             }
         }
-        if (mask != null && !exact) { mask.apply(grid, words, w, h, ox, oy, scale); }
-        List<int[]> corners = boundaries(grid, words, w, h, scratch);
-        if (exact)
+        if (mask != null && !exact)
         {
-            exact(x, y, a, b, c, faces, hidden, ox, oy, scale, w, h, scratch);
-            extend(scratch, w);
+            if (unmasked != null) { unmasked.addAll(staircase(grid, words, w, h, ox, oy, scale, scratch)); }
+            mask.apply(grid, words, w, h, ox, oy, scale);
         }
+        if (!exact) { return staircase(grid, words, w, h, ox, oy, scale, scratch); }
+        List<int[]> corners = boundaries(grid, words, w, h, scratch);
+        exact(x, y, a, b, c, faces, hidden, ox, oy, scale, w, h, scratch);
+        extend(scratch, w);
         List<float[]> loops = new ArrayList<>();
         for (int[] loop : corners)
         {
-            float[] canvas;
-            if (exact) { canvas = place(loop, w, scratch); }
-            else { canvas = new float[loop.length]; for (int i = 0; i < loop.length; i++) { canvas[i] = loop[i]; } }
+            float[] canvas = place(loop, w, scratch);
             for (int i = 0; i < canvas.length; i += 2) { canvas[i] = ox + canvas[i] / scale; canvas[i + 1] = oy + canvas[i + 1] / scale; }
-            // Exact points need half a cell of tolerance to merge straight runs; a staircase one cell.
-            float[] simple = simplify(canvas, (exact ? 0.5 : 1) / scale);
+            // Exact points need half a cell of tolerance to merge straight runs.
+            float[] simple = simplify(canvas, 0.5 / scale);
             if (simple.length >= 6) { loops.add(simple); }
         }
         // The index is left all -1 for the next trace.
+        for (int i = 0; i < scratch.cellCount; i++) { scratch.index[scratch.cells[i]] = -1; }
+        return loops;
+    }
+
+    /** The raster's boundaries as staircase loops on the canvas (a cell of tolerance), leaving the scratch index clear. */
+    private static List<float[]> staircase(long[] grid, int words, int w, int h, float ox, float oy, float scale, Scratch scratch)
+    {
+        List<int[]> corners = boundaries(grid, words, w, h, scratch);
+        List<float[]> loops = new ArrayList<>();
+        for (int[] loop : corners)
+        {
+            float[] canvas = new float[loop.length];
+            for (int i = 0; i < loop.length; i += 2) { canvas[i] = ox + loop[i] / scale; canvas[i + 1] = oy + loop[i + 1] / scale; }
+            float[] simple = simplify(canvas, 1 / scale);
+            if (simple.length >= 6) { loops.add(simple); }
+        }
         for (int i = 0; i < scratch.cellCount; i++) { scratch.index[scratch.cells[i]] = -1; }
         return loops;
     }
