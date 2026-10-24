@@ -2,23 +2,15 @@
 
 ## 1.5.0
 
-- Active path: it no longer disappears while the destination tile still shows (walking into extended chunks). When the game walks you somewhere this plugin has no path for, the path to there is found, and the destination tile is always the end of the path shown, also for a predicted walk.
-- Hover path: Show on minimap is gone. Display alone turns the hover path on (never by default) and Draw location(s) says where; it keeps showing where it did.
-- Interact highlight (under its own section): the NPC, object or ground item the mouse is on, and the one you clicked or interact with, as RuneLite's Interact Highlight, each in the styles you pick (outline, hull, clickbox, tile, true tile), with a border and fill color for each. Hover highlights only what a click would choose (a drink on a table, not the table). Where it draws the same style as a mark of the same thing (a marked object's hull and its hover hull), only Interact highlight's shows. Hide in combat turns it off while you fight, and for NPCs you can attack. Players are never highlighted, as in RuneLite's Interact Highlight. It is off until you turn on the toggle at the top of its section; both start as an outline.
-- A new outline no longer shows as a hull border for a frame first.
-- Predicted walk: a click on an object, NPC, item or player, or a Walk here that meets nothing, ends the last prediction (its far-away destination and second path stayed), and only one path shows at a time.
-- Remove line shows on every tile with a line, also with Add line option off, so lines copied from Line Markers can always be removed; Clear lines on the world map orb removes the lines of the area you are in.
-- The settings sections start collapsed, except General and Tile markers, and the NPC styles' name lists have a section of their own, NPC names.
-- The right-click options start with HD (HD Mark, HD Tag-All, HD Mark object, HD Add line, ...), so they are easy to tell from those of RuneLite's marking plugins used alongside.
-- For plugin developers: highlight players, objects and ground items too (messages `players`, `objects`, `items`), in every style of Interact highlight (outline, hull, clickbox, tile, true tile and the south-west tiles), several per thing with `styles`. Timer pies can follow an NPC or player, above its head, and `texts` puts text on its own on a tile or above a character. NPC highlights get the south-west styles, an outline on a boat, and an NPC sent as itself is not drawn after it despawns. The guide lists every field with its default.
-- Outlines no longer jump or flicker: an outline now colours what lies outside the model within the border's width of it, as RuneLite's own outlines do. Its border no longer runs across a narrow gap onto the model beyond, or over the model around a hole, so it changes only as much as the model does. Thin parts (hair, a pipe, a rope) stay one piece as they move.
-- Hulls, outlines and clickboxes of NPCs and players sit where the game draws them: they were a little too low on a dock or deck, most visible from a low camera.
-- Predicted walk in extended chunks: no longer over open water, along piers again, and around objects without a name that block walking (fences); objects that do not block walking are walked through. Which objects block is a list made from the game cache.
-- A Text section: Font (RuneScape, RuneScape bold, RuneScape small, Smooth, Smooth bold), Size, Edge (shadow, outline or none) and Edge color, for the text of marks (tile marker labels, text from other plugins).
-- Render text in HD (in the Text section, on by default): that text is drawn in the game world like the marks, sharp in stretched mode. It stays over the player, also with Player in front of marks on, and its shadow or outline never comes over it as the camera moves. It faces the camera as it turns, as 2D text, rather than leaning and lagging behind.
-- Text and timer pies above a character move with it in every frame, as its hull does, rather than once per game cycle, so they no longer shake as it walks (in 2D too).
-- Through walls now applies to tiles and labels. Hulls, outlines, clickboxes and timer pies sit in the world at their own depth: a post, a wall or your character in front of them hides them, as the game draws them.
-- Player in front of marks: a tile's border is cut out around your whole character, also the part a post, wall or chest hides (borders ran over it there, so a tile looked cut away in one place and not in another). A tile's fill is cut out around what is seen of your character only: a hole in a fill over the post in front of you showed your shape.
+- **Interact highlight** (new, off by default): highlights what the mouse is on and what you interact with, as an outline, hull, clickbox or tile.
+- **Text**: choose the font, size and edge, and render text in HD so it stays sharp in stretched mode.
+- **Paths**: the active path no longer disappears while the destination tile still shows. Predicted walks in extended chunks avoid water and fences.
+- **Hover path**: *Show on minimap* is gone. *Display* and *Draw location(s)* now decide where it shows.
+- **Outlines** no longer flicker. Hulls and outlines sit right on docks and decks.
+- Through walls and Player in front of marks now work as the game draws things.
+- Right-click options start with **HD**.
+- More highlight options for plugin developers.
+- Faster, less code.
 
 ## 1.3.1
 
