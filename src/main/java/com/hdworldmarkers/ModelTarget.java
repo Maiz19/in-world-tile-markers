@@ -24,6 +24,8 @@ final class ModelTarget
     /** Outline: the model's silhouette, with the line outside it, instead of the convex hull. */
     final boolean outline;
     private final Supplier<Shape> fallback;
+    /** An object's point (location), made once: it stays where it is. */
+    private LocalPoint objectAt;
 
     private ModelTarget(String key, Actor actor, TileObject object, Renderable renderable, int offsetX, int offsetY,
         Color color, Color fill, double borderWidth, boolean clickbox, boolean outline, Supplier<Shape> fallback)
@@ -45,7 +47,7 @@ final class ModelTarget
 
     static Shape clickbox(Client client, Actor npc)
     {
-        net.runelite.api.coords.LocalPoint lp = npc.getLocalLocation();
+        LocalPoint lp = npc.getLocalLocation();
         return lp == null ? null : Perspective.getClickbox(client, npc.getWorldView(), npc.getModel(), npc.getCurrentOrientation(), lp.getX(), lp.getY(),
             height(client, npc, lp));
     }
@@ -85,7 +87,8 @@ final class ModelTarget
     LocalPoint location()
     {
         if (actor != null) { return actor.getLocalLocation(); }
-        return new LocalPoint(object.getX() + offsetX, object.getY() + offsetY, object.getWorldView().getId());
+        if (objectAt == null) { objectAt = new LocalPoint(object.getX() + offsetX, object.getY() + offsetY, object.getWorldView().getId()); }
+        return objectAt;
     }
 
     int plane() { return actor != null ? actor.getWorldView().getPlane() : object.getPlane(); }

@@ -55,16 +55,7 @@ final class Silhouette
      */
     static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch)
     {
-        return trace(x, y, a, b, c, faces, hidden, scratch, true);
-    }
-
-    /**
-     * As trace; without exact, the cell staircase simplified (the player's cut, made every frame, where a cell of precision
-     * does not show).
-     */
-    static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact)
-    {
-        return trace(x, y, a, b, c, faces, hidden, scratch, exact, null);
+        return trace(x, y, a, b, c, faces, hidden, scratch, true, null, null);
     }
 
     /** Leaves cells out of a filled raster before it is traced: cell (i, j) covers canvas ox + i / scale to ox + (i + 1) / scale. */
@@ -73,14 +64,11 @@ final class Silhouette
         void apply(long[] bits, int words, int w, int h, float ox, float oy, float scale);
     }
 
-    /** As trace, the mask applied to the raster first (only without exact, whose edges come from the faces). */
-    static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
-        Mask mask)
-    {
-        return trace(x, y, a, b, c, faces, hidden, scratch, exact, mask, null);
-    }
-
-    /** As trace with a mask; the loops as they were before the mask go into unmasked (when given), from the same raster. */
+    /**
+     * As trace; without exact, the cell staircase simplified (the player's cut, made every frame, where a cell of precision
+     * does not show), and the mask (if any) applied to the raster first (only without exact, whose edges come from the
+     * faces). The loops as they were before the mask go into unmasked (when given), from the same raster.
+     */
     static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
         Mask mask, List<float[]> unmasked)
     {

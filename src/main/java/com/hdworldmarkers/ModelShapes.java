@@ -29,6 +29,9 @@
  */
 package com.hdworldmarkers;
 
+import java.util.Arrays;
+import net.runelite.api.Client;
+
 /**
  * Camera projection matching the client, and convex hulls in canvas space.
  */
@@ -56,10 +59,10 @@ final class ModelShapes
         }
 
         /** The client's camera and viewport now. */
-        static Camera of(net.runelite.api.Client client) { return of(client, null); }
+        static Camera of(Client client) { return of(client, null); }
 
         /** The client's camera and viewport now: last when it is the same (no new camera, nor its sines and cosines). */
-        static Camera of(net.runelite.api.Client client, Camera last)
+        static Camera of(Client client, Camera last)
         {
             float x = client.getCameraFpX(), y = client.getCameraFpY(), z = client.getCameraFpZ();
             float pitch = client.getCameraFpPitch(), yaw = client.getCameraFpYaw();
@@ -138,7 +141,7 @@ final class ModelShapes
             qy[i] = Math.max(0, Math.min((1 << 21) - 1, Math.round(ys[i] * 16) + (1 << 20)));
             keys[m++] = (long) qx[i] << 42 | (long) qy[i] << 21 | i;
         }
-        java.util.Arrays.sort(keys, 0, m);
+        Arrays.sort(keys, 0, m);
         int[] order = new int[m];
         for (int i = 0; i < m; i++) { order[i] = (int) (keys[i] & ((1 << 21) - 1)); }
         int[] hull = new int[2 * m + 1];

@@ -6,6 +6,8 @@ repositories {
 def runeLiteVersion = 'latest.release'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
 }
 group = 'com.hdworldmarkers'
 version = '1.0.0'

@@ -31,8 +31,6 @@
  */
 package com.hdworldmarkers;
 
-import static net.runelite.api.MenuAction.*;
-
 import com.hdworldmarkers.HdWorldMarkersConfig.InteractStyle;
 import com.hdworldmarkers.HdWorldMarkersConfig.Interactable;
 import java.awt.Color;
@@ -41,14 +39,16 @@ import java.util.List;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.events.*;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.util.ColorUtil;
-import net.runelite.client.util.Text;
+import static net.runelite.api.MenuAction.*;
 
 /** The NPC, object or ground item the mouse is on, and the one you clicked or interact with, in the styles picked for each. */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class InteractHighlight
 {
     private final Client client;
@@ -58,8 +58,6 @@ final class InteractHighlight
     private MouseTargets.Item item;
     private Actor actor;
     private int clickTick, clickCycle;
-
-    @Inject InteractHighlight(Client client, HdWorldMarkersConfig config, MouseTargets mouse) { this.client = client; this.config = config; this.mouse = mouse; }
 
     void clear() { object = null; item = null; actor = null; }
 
@@ -181,12 +179,7 @@ final class InteractHighlight
     /** Hide in combat: an NPC you can attack (it has an Attack option) is not highlighted either. */
     private boolean hidden(NPC npc)
     {
-        if (!config.interactHideInCombat()) { return false; }
-        NPCComposition c = npc.getTransformedComposition();
-        String[] options = c == null ? null : c.getActions();
-        if (options == null) { return false; }
-        for (String option : options) { if (option != null && "Attack".equals(Text.removeTags(option))) { return true; } }
-        return false;
+        return config.interactHideInCombat() && MarkerSources.hasAttack(npc.getTransformedComposition());
     }
 
     /** The styles of the moment, hovered or interacted with. */

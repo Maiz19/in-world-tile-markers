@@ -1,7 +1,9 @@
 # Changelog
 
-## 1.4.0
+## 1.5.0
 
+- Active path: it no longer disappears while the destination tile still shows (walking into extended chunks). When the game walks you somewhere this plugin has no path for, the path to there is found, and the destination tile is always the end of the path shown, also for a predicted walk.
+- Hover path: Show on minimap is gone. Display alone turns the hover path on (never by default) and Draw location(s) says where; it keeps showing where it did.
 - Interact highlight (under its own section): the NPC, object or ground item the mouse is on, and the one you clicked or interact with, as RuneLite's Interact Highlight, each in the styles you pick (outline, hull, clickbox, tile, true tile), with a border and fill color for each. Hover highlights only what a click would choose (a drink on a table, not the table). Where it draws the same style as a mark of the same thing (a marked object's hull and its hover hull), only Interact highlight's shows. Hide in combat turns it off while you fight, and for NPCs you can attack. Players are never highlighted, as in RuneLite's Interact Highlight. It is off until you turn on the toggle at the top of its section; both start as an outline.
 - A new outline no longer shows as a hull border for a frame first.
 - Predicted walk: a click on an object, NPC, item or player, or a Walk here that meets nothing, ends the last prediction (its far-away destination and second path stayed), and only one path shows at a time.

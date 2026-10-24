@@ -39,10 +39,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.client.config.ConfigManager;
 
 /** The tiles of the packs turned on in Tile Packs: its own packs from its pack list, custom packs from its settings. */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class TilePackSource
 {
     static final String GROUP = "tilePacks";
@@ -53,9 +55,6 @@ final class TilePackSource
     private Map<Integer, String> bundled;
     /** The turned-on packs' tiles per region; null when they are read again. */
     private Map<Integer, List<MarkerSources.TilePoint>> tiles;
-
-    @Inject
-    TilePackSource(ConfigManager configs, Gson gson) { this.configs = configs; this.gson = gson; }
 
     /** Tile Packs' settings changed: the packs are read again. */
     void clear() { tiles = null; }

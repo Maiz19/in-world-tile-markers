@@ -1,7 +1,9 @@
 package com.hdworldmarkers;
 
+import java.util.Arrays;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.Client;
 import net.runelite.api.Model;
 import net.runelite.api.ModelData;
@@ -13,6 +15,7 @@ import net.runelite.api.gameval.ItemID;
  * of their geometry is replaced; no item is ever displayed.
  */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class CarrierModels
 {
     private final Client client;
@@ -24,9 +27,6 @@ final class CarrierModels
      * that is tried again once per frame rather than kept as a failure.
      */
     private boolean triedThisFrame;
-
-    @Inject
-    CarrierModels(Client client) { this.client = client; }
 
     /*
      * Renderer limits per model (GPU plugin ModelUploader: 6500 vertices, 4000 faces per priority).
@@ -98,7 +98,7 @@ final class CarrierModels
         // Never mutate cache-owned arrays.
         if (data.getFaceIndices1() == seed.getFaceIndices1() || data.getFaceIndices2() == seed.getFaceIndices2()
             || data.getFaceIndices3() == seed.getFaceIndices3() || data.getVerticesX() == seed.getVerticesX()) { return null; }
-        if (data.getFaceTextures() != null) { java.util.Arrays.fill(data.getFaceTextures(), (short) -1); }
+        if (data.getFaceTextures() != null) { Arrays.fill(data.getFaceTextures(), (short) -1); }
         Model model = data.light();
         if (model == null || model.getVerticesCount() < vertices || model.getFaceCount() < faces
             || model.getFaceTransparencies() == null) { return null; }
@@ -106,11 +106,11 @@ final class CarrierModels
         // The seed's faces have render priorities (two of them 1), which renderers sort by before depth: whatever face of
         // a mark came to lie in such a slot was drawn over every other mark, another one each frame as shapes changed.
         byte[] priorities = model.getFaceRenderPriorities();
-        if (priorities != null) { java.util.Arrays.fill(priorities, (byte) 0); }
+        if (priorities != null) { Arrays.fill(priorities, (byte) 0); }
         float[] x = model.getVerticesX(), y = model.getVerticesY(), z = model.getVerticesZ();
-        java.util.Arrays.fill(x, 0);
-        java.util.Arrays.fill(y, 0);
-        java.util.Arrays.fill(z, 0);
+        Arrays.fill(x, 0);
+        Arrays.fill(y, 0);
+        Arrays.fill(z, 0);
         x[0] = radius; x[1] = -radius; y[2] = radius; y[3] = -radius; z[4] = radius; z[5] = -radius;
         model.calculateBoundsCylinder();
         // If the bounds were already fixed earlier, geometry could leave them: refuse, use 2D.

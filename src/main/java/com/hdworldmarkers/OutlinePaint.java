@@ -6,7 +6,9 @@ import java.awt.geom.Area;
 import java.awt.geom.Path2D;
 import java.awt.geom.PathIterator;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 
 /**
  * What an outline paints: everything outside the silhouette within the border's width of it, as triangles. A border
@@ -20,12 +22,11 @@ final class OutlinePaint
     private OutlinePaint() { }
 
     /** Triangles over points {x0, y0, x1, y1, ...}: vertices of each triangle in tris. */
+    @RequiredArgsConstructor
     static final class Mesh
     {
         final float[] xy;
         final int[] tris;
-
-        Mesh(float[] xy, int[] tris) { this.xy = xy; this.tris = tris; }
     }
 
     /** Holes in the silhouette smaller than this (square canvas pixels) count as part of the model. */
@@ -70,7 +71,7 @@ final class OutlinePaint
     /** A region (an Area of straight pieces) as triangles; null for an empty one. */
     static Mesh fill(Area region)
     {
-        List<double[]> rings = rings(region);
+        List<double[]> rings = rings(region, FLATNESS, SAME);
         if (rings.isEmpty()) { return null; }
         // A ring inside an odd number of others is a hole, and goes with the smallest ring around it; the others are
         // outer rings.
@@ -126,43 +127,46 @@ final class OutlinePaint
             for (double[] p : parts) { System.arraycopy(p, 0, data, at, p.length); at += p.length; }
             int[] t = Earcut.earcut(data, holeStarts);
             for (int i = 0; i < data.length; i++) { xy[vertex * 2 + i] = (float) data[i]; }
-            if (made + t.length > tris.length) { tris = java.util.Arrays.copyOf(tris, (made + t.length) * 2); }
+            if (made + t.length > tris.length) { tris = Arrays.copyOf(tris, (made + t.length) * 2); }
             for (int i : t) { tris[made++] = vertex + i; }
             vertex += data.length / 2;
         }
-        return made == 0 ? null : new Mesh(xy, java.util.Arrays.copyOf(tris, made));
+        return made == 0 ? null : new Mesh(xy, Arrays.copyOf(tris, made));
     }
 
-    /** The closed rings of a shape, flattened, without repeated points: {x0, y0, ...} each. */
-    private static List<double[]> rings(Shape shape)
+    /**
+     * The closed rings of a shape, flattened this finely, without repeated points (those nearer than same: a point
+     * is only the same as itself at Double.MIN_VALUE), nor the closing point: {x0, y0, ...} each.
+     */
+    static List<double[]> rings(Shape shape, double flatness, double same)
     {
         List<double[]> rings = new ArrayList<>();
         double[] c = new double[6];
         double[] ring = new double[64];
         int n = 0;
-        for (PathIterator it = shape.getPathIterator(null, FLATNESS); !it.isDone(); it.next())
+        for (PathIterator it = shape.getPathIterator(null, flatness); !it.isDone(); it.next())
         {
             int type = it.currentSegment(c);
             if (type == PathIterator.SEG_MOVETO)
             {
-                if (n >= 6) { rings.add(java.util.Arrays.copyOf(ring, n)); }
+                if (n >= 6) { rings.add(Arrays.copyOf(ring, n)); }
                 n = 0;
             }
             if (type == PathIterator.SEG_MOVETO || type == PathIterator.SEG_LINETO)
             {
-                if (n >= 2 && near(ring[n - 2], ring[n - 1], c[0], c[1])) { continue; }
-                if (n + 2 > ring.length) { ring = java.util.Arrays.copyOf(ring, ring.length * 2); }
+                if (n >= 2 && near(ring[n - 2], ring[n - 1], c[0], c[1], same)) { continue; }
+                if (n + 2 > ring.length) { ring = Arrays.copyOf(ring, ring.length * 2); }
                 ring[n++] = c[0];
                 ring[n++] = c[1];
             }
             else if (type == PathIterator.SEG_CLOSE)
             {
-                while (n >= 4 && near(ring[0], ring[1], ring[n - 2], ring[n - 1])) { n -= 2; }
-                if (n >= 6) { rings.add(java.util.Arrays.copyOf(ring, n)); }
+                while (n >= 4 && near(ring[0], ring[1], ring[n - 2], ring[n - 1], same)) { n -= 2; }
+                if (n >= 6) { rings.add(Arrays.copyOf(ring, n)); }
                 n = 0;
             }
         }
-        if (n >= 6) { rings.add(java.util.Arrays.copyOf(ring, n)); }
+        if (n >= 6) { rings.add(Arrays.copyOf(ring, n)); }
         return rings;
     }
 
@@ -172,7 +176,7 @@ final class OutlinePaint
      */
     private static final double SAME = 1e-3;
 
-    private static boolean near(double ax, double ay, double bx, double by) { return Math.abs(ax - bx) < SAME && Math.abs(ay - by) < SAME; }
+    private static boolean near(double ax, double ay, double bx, double by, double same) { return Math.abs(ax - bx) < same && Math.abs(ay - by) < same; }
 
     private static double area(double[] r)
     {

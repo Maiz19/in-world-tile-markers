@@ -1,32 +1,38 @@
 package com.hdworldmarkers;
 
 import com.google.inject.Provides;
+import java.awt.Dimension;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.BiPredicate;
 import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
-import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.events.PluginChanged;
+import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.plugins.*;
 import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.ui.overlay.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 @PluginDescriptor(name = "HD World Markers", description = "Sharp tile, line, NPC, object and path markers drawn in the game world, also in stretched mode",
     tags = {"tiles", "lines", "markers", "npcs", "objects", "path", "stretched"})
 // Your Slayer task's NPCs (Slayer task option) come from the Slayer plugin's service.
 @PluginDependency(SlayerPlugin.class)
+@Slf4j
 public class HdWorldMarkersPlugin extends Plugin
 {
     /**
@@ -34,7 +40,6 @@ public class HdWorldMarkersPlugin extends Plugin
      * is far costlier than the scene: many NPCs marked with every style (a field of cows) passed 64 and slowed down.
      */
     static final int MAX_TILES = 1500, MAX_MODELS = 256;
-    private static final Logger log = LoggerFactory.getLogger(HdWorldMarkersPlugin.class);
     @Inject private Client client;
     @Inject private ClientThread clientThread;
     @Inject private EventBus eventBus;
@@ -68,13 +73,46 @@ public class HdWorldMarkersPlugin extends Plugin
     private long retryDelay = FIRST_RETRY;
     private static final long FIRST_RETRY = 2_000, LAST_RETRY = 60_000;
     /** Each kind of failure is logged once. */
-    private final java.util.Set<String> loggedFailures = new java.util.HashSet<>();
+    private final Set<String> loggedFailures = new HashSet<>();
     private boolean sceneUnavailable;
     private List<Marker> markers = Collections.emptyList();
     /** Of the markers, those drawn in the scene (the nearest MAX_TILES), picked once per tick rather than per frame. */
     private List<Marker> sceneMarkers = Collections.emptyList();
     private List<ModelTarget> modelTargets = Collections.emptyList();
     private Marker hover;
+
+    /**
+     * Game ticks since logging in: nothing is drawn before the first, when the camera is not yet set and a mark was
+     * drawn as a large square for a frame. Only after a login, not after loading a new area, which then drew nothing
+     * for a moment. Counted here, as the client's tick count restarts at login; starts high, so turning the plugin on
+     * while logged in draws at once.
+     */
+    private int ticksSinceLogin = Integer.MAX_VALUE;
+    /** Time per frame for making models ahead while logging in. */
+    private static final long PREWARM_NANOS = 3_000_000;
+    /** Logging in, until logged in: a login may pass through LOADING first. */
+    private boolean loggingIn;
+    private static final int ANCHOR_STEPS = 16;
+    /** The tiles you can walk to near you, for xrayAnchor, and what they were found for. */
+    private final RouteFinder anchorRoutes = new RouteFinder();
+    private List<int[]> anchorTiles = Collections.emptyList();
+    /** Where anchorTiles were found: scene x, y, plane, base x, y and tick. */
+    private final int[] anchorTilesKey = {-1, -1, -1, -1, -1, -1};
+    private static final String HD = "rs117.hd.HdPlugin", GPU = "net.runelite.client.plugins.gpu.GpuPlugin";
+    /**
+     * 117 HD's settings the scene marks follow, read when they or the plugins change rather than every frame: {its shadows
+     * on, their transparency on, its lightness cap on}; null when they are to be read again.
+     */
+    private volatile boolean[] hdSettings;
+    @Inject private ChatMessageManager chatMessages;
+    /**
+     * The shadow transparency notice is shown once after the plugin starts, and again when 117 HD's
+     * Shadow transparency is turned back on.
+     */
+    private boolean warnedShadowTransparency;
+    private List<Marker> byLayer = Collections.emptyList(), byLayerOf;
+    /** The Text section's options, read again after they change. */
+    private volatile SceneText.Style textStyle;
 
     @Provides HdWorldMarkersConfig provideConfig(ConfigManager manager)
     { return manager.getConfig(HdWorldMarkersConfig.class); }
@@ -166,18 +204,6 @@ public class HdWorldMarkersPlugin extends Plugin
         }
     }
 
-    /**
-     * Game ticks since logging in: nothing is drawn before the first, when the camera is not yet set and a mark was
-     * drawn as a large square for a frame. Only after a login, not after loading a new area, which then drew nothing
-     * for a moment. Counted here, as the client's tick count restarts at login; starts high, so turning the plugin on
-     * while logged in draws at once.
-     */
-    private int ticksSinceLogin = Integer.MAX_VALUE;
-    /** Time per frame for making models ahead while logging in. */
-    private static final long PREWARM_NANOS = 3_000_000;
-    /** Logging in, until logged in: a login may pass through LOADING first. */
-    private boolean loggingIn;
-
     @Subscribe public void onBeforeRender(BeforeRender event)
     {
         if (!running || dirty || client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null) { return; }
@@ -247,10 +273,10 @@ public class HdWorldMarkersPlugin extends Plugin
         if (player.getWorldView() != wv) { return at; }
         int plane = wv.getPlane();
         // Found again as you move, and every tick (doors open and close).
-        long key = ((long) java.util.Objects.hash(at.getSceneX(), at.getSceneY(), plane, wv.getBaseX(), wv.getBaseY()) << 32) | client.getTickCount();
-        if (key != anchorTilesKey)
+        int[] k = anchorTilesKey;
+        if (k[0] != at.getSceneX() || k[1] != at.getSceneY() || k[2] != plane || k[3] != wv.getBaseX() || k[4] != wv.getBaseY() || k[5] != client.getTickCount())
         {
-            anchorTilesKey = key;
+            k[0] = at.getSceneX(); k[1] = at.getSceneY(); k[2] = plane; k[3] = wv.getBaseX(); k[4] = wv.getBaseY(); k[5] = client.getTickCount();
             anchorTiles = anchorRoutes.load(wv) ? anchorRoutes.reachable(at.getSceneX(), at.getSceneY(), ANCHOR_STEPS) : Collections.emptyList();
         }
         int left = client.getViewportXOffset(), top = client.getViewportYOffset();
@@ -276,7 +302,7 @@ public class HdWorldMarkersPlugin extends Plugin
         int[] distances = new int[marks.size()];
         for (int i = 0; i < distances.length; i++) { distances[i] = distance(marks.get(i), at); }
         int[] sorted = distances.clone();
-        java.util.Arrays.sort(sorted);
+        Arrays.sort(sorted);
         List<Marker> out = new ArrayList<>(max);
         for (int i = 0; i < distances.length && out.size() < max; i++) { if (distances[i] <= sorted[max - 1]) { out.add(marks.get(i)); } }
         return out;
@@ -285,24 +311,18 @@ public class HdWorldMarkersPlugin extends Plugin
     /** How far a mark lies from a point, in local units along both axes. */
     private static int distance(Marker m, LocalPoint at) { return Math.abs(m.point.getX() - at.getX()) + Math.abs(m.point.getY() - at.getY()); }
 
-    private static final int ANCHOR_STEPS = 16;
-    /** The tiles you can walk to near you, for xrayAnchor, and what they were found for. */
-    private final RouteFinder anchorRoutes = new RouteFinder();
-    private List<int[]> anchorTiles = Collections.emptyList();
-    private long anchorTilesKey = Long.MIN_VALUE;
-
     /**
      * Of these tiles (scene x, y), those on screen, the one nearest the camera in the zone whose centre is nearest the
      * camera, the one the client draws last: its local {x, y}; null without one.
      */
-    static int[] nearestDrawnTile(float camX, float camY, List<int[]> tiles, java.util.function.BiPredicate<Integer, Integer> onScreen)
+    static int[] nearestDrawnTile(float camX, float camY, List<int[]> tiles, BiPredicate<Integer, Integer> onScreen)
     {
         int[] best = null;
         double bestZone = Double.MAX_VALUE, bestTile = Double.MAX_VALUE;
         for (int[] t : tiles)
         {
-            double zone = Math.pow((t[0] >> 3) * 1024 + 512 - camX, 2) + Math.pow((t[1] >> 3) * 1024 + 512 - camY, 2);
-            double tile = Math.pow(t[0] * 128 + 64 - camX, 2) + Math.pow(t[1] * 128 + 64 - camY, 2);
+            double zx = (t[0] >> 3) * 1024 + 512 - camX, zy = (t[1] >> 3) * 1024 + 512 - camY, tx = t[0] * 128 + 64 - camX, ty = t[1] * 128 + 64 - camY;
+            double zone = zx * zx + zy * zy, tile = tx * tx + ty * ty;
             if ((zone < bestZone || zone == bestZone && tile < bestTile) && onScreen.test(t[0], t[1])) { best = t; bestZone = zone; bestTile = tile; }
         }
         return best == null ? null : new int[]{best[0] * 128 + 64, best[1] * 128 + 64};
@@ -328,7 +348,7 @@ public class HdWorldMarkersPlugin extends Plugin
     private float stretchScale()
     {
         if (!client.isStretchedEnabled()) { return 1f; }
-        java.awt.Dimension real = client.getRealDimensions(), stretched = client.getStretchedDimensions();
+        Dimension real = client.getRealDimensions(), stretched = client.getStretchedDimensions();
         if (real == null || stretched == null || real.width <= 0 || stretched.width <= 0) { return 1f; }
         return stretched.width / (float) real.width;
     }
@@ -405,13 +425,6 @@ public class HdWorldMarkersPlugin extends Plugin
         tilePacks.clear();
     }
 
-    private static final String HD = "rs117.hd.HdPlugin", GPU = "net.runelite.client.plugins.gpu.GpuPlugin";
-    /**
-     * 117 HD's settings the scene marks follow, read when they or the plugins change rather than every frame: {its shadows
-     * on, their transparency on, its lightness cap on}; null when they are to be read again.
-     */
-    private volatile boolean[] hdSettings;
-
     private boolean[] hdSettings()
     {
         boolean[] now = hdSettings;
@@ -440,12 +453,6 @@ public class HdWorldMarkersPlugin extends Plugin
         dirty = true;
         failedUntil = 0;
     }
-    @Inject private net.runelite.client.chat.ChatMessageManager chatMessages;
-    /**
-     * The shadow transparency notice is shown once after the plugin starts, and again when 117 HD's
-     * Shadow transparency is turned back on.
-     */
-    private boolean warnedShadowTransparency;
 
     /**
      * 117 HD with its "Shadow transparency" on lets every visible face cast a shadow, so marks drawn
@@ -455,11 +462,8 @@ public class HdWorldMarkersPlugin extends Plugin
     {
         if (warnedShadowTransparency) { return; }
         warnedShadowTransparency = true;
-        notice("turn off \"Shadow transparency\" in 117 HD's settings, or marks drawn through walls cast shadows that move with the camera.");
+        Chat.send(chatMessages, "turn off \"Shadow transparency\" in 117 HD's settings, or marks drawn through walls cast shadows that move with the camera.", true);
     }
-
-    /** A notice in the chat box, local only. */
-    private void notice(String text) { Chat.send(chatMessages, text, true); }
 
     @Subscribe public void onConfigChanged(ConfigChanged e)
     {
@@ -503,8 +507,6 @@ public class HdWorldMarkersPlugin extends Plugin
 
     List<Marker> markers() { return markers; }
 
-    private List<Marker> byLayer = Collections.emptyList(), byLayerOf;
-
     /** The markers in layer order, for the 2D overlay: sorted once per tick, not per frame. */
     List<Marker> markersByLayer()
     {
@@ -522,10 +524,6 @@ public class HdWorldMarkersPlugin extends Plugin
     /** The hovered tile for the overlay: read at overlay time when drawn in 2D, for zero delay. */
     Marker hover() { return !client.isGpu() || failed() ? sources.hover() : hover; }
 
-    /** The scene route works: GPU on, no rendering error, carrier models available. */
-    /** The Text section's options, read again after they change. */
-    private volatile SceneText.Style textStyle;
-
     SceneText.Style textStyle()
     {
         SceneText.Style style = textStyle;
@@ -533,6 +531,7 @@ public class HdWorldMarkersPlugin extends Plugin
         return style;
     }
 
+    /** The scene route works: GPU on, no rendering error, carrier models available. */
     boolean sceneActive() { return client.isGpu() && !failed() && !sceneUnavailable; }
 
     private boolean failed() { return System.currentTimeMillis() < failedUntil; }

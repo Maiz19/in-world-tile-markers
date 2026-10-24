@@ -4,6 +4,7 @@ import java.util.*;
 import java.util.function.BooleanSupplier;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.Plugin;
@@ -21,12 +22,11 @@ final class OverlapWarnings
     static final String BETTER_NPC_HIGHLIGHT = "com.betternpchighlight.BetterNpcHighlightPlugin";
 
     /** A plugin that can draw the same: its class, its name, and whether it does now. */
+    @RequiredArgsConstructor
     private static final class Overlap
     {
         final String type, name;
         final BooleanSupplier now;
-
-        Overlap(String type, String name, BooleanSupplier now) { this.type = type; this.name = name; this.now = now; }
     }
 
     private final PluginManager plugins;

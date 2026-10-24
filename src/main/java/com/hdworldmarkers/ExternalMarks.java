@@ -3,14 +3,16 @@ package com.hdworldmarkers;
 import java.awt.Color;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PluginMessage;
-import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.util.Text;
 
@@ -52,6 +54,7 @@ import net.runelite.client.util.Text;
  * Marks stay until their owner replaces or clears them.
  */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class ExternalMarks
 {
     static final String NAMESPACE = "hd-world-markers";
@@ -77,19 +80,15 @@ final class ExternalMarks
      * replaced from another thread while a tick made its markers is then made again the next tick, rather than kept; up
      * or down stairs (no scene load) the other floor's points are made.
      */
+    @RequiredArgsConstructor
     private static final class Made
     {
         final List<Map<String, Object>> from;
         final int plane;
         final List<Marker> markers;
 
-        Made(List<Map<String, Object>> from, int plane, List<Marker> markers) { this.from = from; this.plane = plane; this.markers = markers; }
-
         boolean of(List<Map<String, Object>> list, int plane) { return from == list && this.plane == plane; }
     }
-
-    @Inject
-    ExternalMarks(Client client) { this.client = client; }
 
     void clear() { tiles.clear(); highlights.clear(); pies.clear(); lines.clear(); texts.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
 
@@ -111,18 +110,19 @@ final class ExternalMarks
     @Subscribe
     public void onPluginMessage(PluginMessage message)
     {
-        if (!NAMESPACE.equals(message.getNamespace()) || message.getData() == null) { return; }
-        Object owner = message.getData().get("owner");
-        if (!(owner instanceof String) || ((String) owner).isEmpty()) { return; }
+        Map<String, Object> data = message.getData();
+        if (!NAMESPACE.equals(message.getNamespace()) || data == null || !(data.get("owner") instanceof String)) { return; }
+        String owner = (String) data.get("owner");
+        if (owner.isEmpty()) { return; }
         switch (message.getName())
         {
-            case "tiles": tiles.put((String) owner, entries(message.getData().get("tiles"))); tileMarkers.remove(owner); break;
+            case "tiles": tiles.put(owner, entries(data.get("tiles"))); tileMarkers.remove(owner); break;
             case "npcs": case "players": case "objects": case "items":
-                highlights.computeIfAbsent(message.getName(), k -> new ConcurrentHashMap<>()).put((String) owner, entries(message.getData().get(message.getName())));
+                highlights.computeIfAbsent(message.getName(), k -> new ConcurrentHashMap<>()).put(owner, entries(data.get(message.getName())));
                 break;
-            case "pies": pies.put((String) owner, entries(message.getData().get("pies"))); pieMarkers.remove(owner); break;
-            case "texts": texts.put((String) owner, entries(message.getData().get("texts"))); break;
-            case "lines": lines.put((String) owner, lines(message.getData().get("lines"))); lineMarkers.remove(owner); break;
+            case "pies": pies.put(owner, entries(data.get("pies"))); pieMarkers.remove(owner); break;
+            case "texts": texts.put(owner, entries(data.get("texts"))); break;
+            case "lines": lines.put(owner, lines(data.get("lines"))); lineMarkers.remove(owner); break;
             case "clear":
                 tiles.remove(owner); pies.remove(owner); lines.remove(owner); texts.remove(owner);
                 for (Map<String, List<Map<String, Object>>> kind : highlights.values()) { kind.remove(owner); }
@@ -164,7 +164,22 @@ final class ExternalMarks
         return Collections.unmodifiableList(result);
     }
 
-    void collect(List<Marker> markerOut, List<ModelTarget> modelOut) { collect(markerOut, modelOut, new ArrayList<>()); }
+    /** Each owner's marks of one kind as markers on this floor, made again when its list or the plane changed, or always says so. */
+    private static void made(Map<String, List<Map<String, Object>>> kind, Map<String, Made> cache, int plane, Predicate<List<Map<String, Object>>> always,
+        BiFunction<String, List<Map<String, Object>>, List<Marker>> make, List<Marker> out)
+    {
+        for (Map.Entry<String, List<Map<String, Object>>> owner : kind.entrySet())
+        {
+            List<Map<String, Object>> list = owner.getValue();
+            Made made = cache.get(owner.getKey());
+            if (made == null || !made.of(list, plane) || always.test(list))
+            {
+                made = new Made(list, plane, make.apply(owner.getKey(), list));
+                cache.put(owner.getKey(), made);
+            }
+            onFloor(made.markers, plane, out);
+        }
+    }
 
     /** The marks of the moment: tiles, lines and pies as markers, highlights' models; outlines in other world views (a boat) to elsewhereOut. */
     void collect(List<Marker> markerOut, List<ModelTarget> modelOut, List<ModelTarget> elsewhereOut)
@@ -172,41 +187,11 @@ final class ExternalMarks
         WorldView wv = client.getTopLevelWorldView();
         if (wv == null) { return; }
         int plane = wv.getPlane();
-        for (Map.Entry<String, List<Map<String, Object>>> owner : tiles.entrySet())
-        {
-            List<Map<String, Object>> list = owner.getValue();
-            Made made = tileMarkers.get(owner.getKey());
-            if (made == null || !made.of(list, plane))
-            {
-                made = new Made(list, plane, tileMarkers(wv, owner.getKey(), list));
-                tileMarkers.put(owner.getKey(), made);
-            }
-            onFloor(made.markers, plane, markerOut);
-        }
-        for (Map.Entry<String, List<Map<String, Object>>> owner : lines.entrySet())
-        {
-            List<Map<String, Object>> list = owner.getValue();
-            Made made = lineMarkers.get(owner.getKey());
-            if (made == null || !made.of(list, plane))
-            {
-                made = new Made(list, plane, lineMarkers(wv, owner.getKey(), list));
-                lineMarkers.put(owner.getKey(), made);
-            }
-            onFloor(made.markers, plane, markerOut);
-        }
+        made(tiles, tileMarkers, plane, l -> false, (o, l) -> tileMarkers(wv, o, l), markerOut);
+        made(lines, lineMarkers, plane, l -> false, (o, l) -> lineMarkers(wv, o, l), markerOut);
         long now = System.currentTimeMillis();
-        for (Map.Entry<String, List<Map<String, Object>>> owner : pies.entrySet())
-        {
-            List<Map<String, Object>> list = owner.getValue();
-            Made made = pieMarkers.get(owner.getKey());
-            // Pies that fill by the clock or follow a character are made anew each time.
-            if (made == null || !made.of(list, plane) || list.stream().anyMatch(p -> timed(p) || follows(p)))
-            {
-                made = new Made(list, plane, pieMarkers(wv, owner.getKey(), list, now));
-                pieMarkers.put(owner.getKey(), made);
-            }
-            onFloor(made.markers, plane, markerOut);
-        }
+        // Pies that fill by the clock or follow a character are made anew each time.
+        made(pies, pieMarkers, plane, l -> l.stream().anyMatch(p -> timed(p) || follows(p)), (o, l) -> pieMarkers(wv, o, l, now), markerOut);
         for (Map.Entry<String, List<Map<String, Object>>> owner : texts.entrySet())
         {
             int n = 0;
@@ -222,7 +207,7 @@ final class ExternalMarks
                     m.lift = number(t.get("height"), at.lift);
                     m.follow = at.actor;
                     m.layer = Marker.EXTERNAL;
-                    if (m.plane == plane || at.follows) { markerOut.add(m); }
+                    if (m.plane == plane || at.actor != null) { markerOut.add(m); }
                 }
             }
         }
@@ -373,7 +358,7 @@ final class ExternalMarks
      * clockwise from the top, then the ring. Sized in local units, so they grow and shrink with the world as the camera
      * zooms.
      */
-    private List<Marker> pieMarkers(WorldView wv, String owner, List<Map<String, Object>> entries, long now)
+    private static List<Marker> pieMarkers(WorldView wv, String owner, List<Map<String, Object>> entries, long now)
     {
         List<Marker> out = new ArrayList<>();
         int n = 0;
@@ -493,18 +478,15 @@ final class ExternalMarks
     /** Whether a pie or text follows a character rather than standing on a point. */
     private static boolean follows(Map<String, Object> t) { return t.get("npc") != null || t.get("index") != null || t.get("player") != null || t.get("name") != null; }
 
-    /** Where a pie or text stands: its point, its plane, its height above the ground by default; whether it follows a character. */
+    /** Where a pie or text stands: its point, its plane, its height above the ground by default, and the character it follows. */
+    @RequiredArgsConstructor
     private static final class Place
     {
         final LocalPoint point;
         final int plane, lift;
-        final boolean follows;
 
         /** The character it follows (Marker.follow), else null. */
         final Actor actor;
-
-        Place(LocalPoint point, int plane, int lift, Actor actor)
-        { this.point = point; this.plane = plane; this.lift = lift; this.follows = actor != null; this.actor = actor; }
     }
 
     /**
@@ -556,16 +538,7 @@ final class ExternalMarks
     }
 
     /** The scene tile of a world point, also in the extended tiles around the loaded area. */
-    private static Tile tile(WorldView wv, WorldPoint p)
-    {
-        Scene scene = wv.getScene();
-        Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
-        if (tiles == null) { tiles = scene == null ? null : scene.getTiles(); }
-        int plane = p.getPlane();
-        if (tiles == null || plane < 0 || plane >= tiles.length) { return null; }
-        int offset = (tiles[plane].length - wv.getSizeX()) / 2, x = p.getX() - wv.getBaseX() + offset, y = p.getY() - wv.getBaseY() + offset;
-        return x < 0 || y < 0 || x >= tiles[plane].length || y >= tiles[plane][x].length ? null : tiles[plane][x][y];
-    }
+    private static Tile tile(WorldView wv, WorldPoint p) { return MouseTargets.tile(wv, p.getX() - wv.getBaseX(), p.getY() - wv.getBaseY(), p.getPlane()); }
 
     private static Color color(Object value, Color fallback)
     {
@@ -578,5 +551,4 @@ final class ExternalMarks
     {
         return value instanceof Number ? ((Number) value).intValue() : fallback;
     }
-
 }

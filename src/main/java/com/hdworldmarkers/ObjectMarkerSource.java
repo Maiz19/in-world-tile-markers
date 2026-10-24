@@ -41,12 +41,14 @@ import java.awt.Color;
 import java.util.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.config.ConfigManager;
 
 /** The objects marked with Mark object, saved per region of the map. */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class ObjectMarkerSource
 {
     /** Config key prefix of a region's marked objects. */
@@ -59,12 +61,6 @@ final class ObjectMarkerSource
     private final HdWorldMarkersConfig config;
     private final Map<Integer, List<ObjectPoint>> points = new HashMap<>();
     private final List<Marked> objects = new ArrayList<>();
-
-    @Inject
-    ObjectMarkerSource(Client client, ConfigManager configs, Gson gson, HdWorldMarkersConfig config)
-    {
-        this.client = client; this.configs = configs; this.gson = gson; this.config = config;
-    }
 
     /** A marked object in the scene, with its own colors and styles (flags; 0 for the options'). */
     static final class Marked
@@ -235,17 +231,12 @@ final class ObjectMarkerSource
     /** A color at a twelfth of its alpha: Object Markers' clickbox and tile fill without a fill color. */
     private static Color twelfth(Color c) { return new Color(c.getRed(), c.getGreen(), c.getBlue(), c.getAlpha() / 12); }
 
+    @RequiredArgsConstructor
     static final class Resolved
     {
         final TileObject object;
         final int flags;
         final Color border, hullFill, otherFill;
         final double borderWidth;
-
-        Resolved(TileObject object, int flags, Color border, Color hullFill, Color otherFill, double borderWidth)
-        {
-            this.object = object; this.flags = flags; this.border = border; this.hullFill = hullFill;
-            this.otherFill = otherFill; this.borderWidth = borderWidth;
-        }
     }
 }

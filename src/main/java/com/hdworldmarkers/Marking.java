@@ -40,6 +40,7 @@ package com.hdworldmarkers;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import com.hdworldmarkers.HdWorldMarkersConfig.NpcStyle;
 import java.awt.Color;
 import java.awt.Toolkit;
@@ -48,10 +49,12 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseWheelEvent;
 import java.util.*;
-import java.util.function.Consumer;
+import java.util.function.*;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.SwingUtilities;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.FocusChanged;
@@ -88,23 +91,19 @@ import net.runelite.client.util.WildcardMatcher;
  * HD World Markers first starts in a profile, and again with Sync.
  */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class Marking
 {
     private static final String TILE = "Tile";
-    private static final WidgetMenuOption EXPORT = new WidgetMenuOption("Export", "HD World Markers",
-        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
-    private static final WidgetMenuOption IMPORT = new WidgetMenuOption("Import", "HD World Markers",
-        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
-    private static final WidgetMenuOption SYNC = new WidgetMenuOption("Sync", "HD World Markers",
-        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
-    private static final WidgetMenuOption CLEAR = new WidgetMenuOption("Clear", "HD World Markers",
-        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
-    private static final WidgetMenuOption CLEAR_LINES = new WidgetMenuOption("Clear lines", "HD World Markers",
-        InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    /** The world map orb's options. */
+    private static final WidgetMenuOption EXPORT = orb("Export"), IMPORT = orb("Import"), SYNC = orb("Sync"), CLEAR = orb("Clear"),
+        CLEAR_LINES = orb("Clear lines");
     /** The colors offered in the color menus after those in use, as RuneLite's marking plugins. */
     private static final Color[] DEFAULT_COLORS = {Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA};
     /** Set in a profile once the other plugins' marks and options were taken over there. */
     static final String COPIED = "tookOverMarkingPlugins3";
+    /** Set in a profile once the hover path's Show on minimap was folded into its Display and Draw location(s). */
+    static final String HOVER_PATH_MOVED = "hoverPathMinimapMoved";
     /** The settings groups of Ground Markers, Object Markers and NPC Indicators. */
     private static final String GROUND_MARKERS = "groundMarker", OBJECT_MARKERS = "objectindicators", NPC_INDICATORS = "npcindicators",
         TILE_INDICATORS = "tileindicators", AGILITY = "agility", BETTER_NPC_HIGHLIGHT = "BetterNpcHighlight", LINE_MARKERS = "linemarkers";
@@ -123,6 +122,8 @@ final class Marking
     private final PluginManager plugins;
     private final KeyManager keys;
     private final MouseManager mouse;
+    /** The object a menu option is on, as the highlights find it (Object Markers' findTileObject, with impostors). */
+    private final MouseTargets targets;
     /** The line just added, which the mouse wheel turns while Shift stays held; null once it is released. */
     private volatile MarkerSources.LinePoint lastLine;
     /** The line added or turned last, and its tile: Extend line on a tile in line with it fills the tiles between. */
@@ -138,15 +139,14 @@ final class Marking
     };
     private final MouseWheelListener wheelListener = this::wheel;
 
-    @Inject
-    Marking(Client client, ClientThread clientThread, ConfigManager configs, HdWorldMarkersConfig config, MarkerSources sources,
-        ObjectMarkerSource objects, MenuManager menus, ChatboxPanelManager chatbox, ChatMessageManager chat, Gson gson,
-        ColorPickerManager colorPickers, PluginManager plugins, KeyManager keys, MouseManager mouse)
-    {
-        this.client = client; this.clientThread = clientThread; this.configs = configs; this.config = config; this.sources = sources;
-        this.objects = objects; this.menus = menus; this.chatbox = chatbox; this.chat = chat; this.gson = gson;
-        this.colorPickers = colorPickers; this.plugins = plugins; this.keys = keys; this.mouse = mouse;
-    }
+    /**
+     * A profile switch: its settings are moved and the other plugins' marks taken over at the next game tick or login.
+     * RuneLite handles the switch after this and stops the plugin in a profile where it is off or not installed, which
+     * then got them all the same.
+     */
+    private volatile boolean profileSwitched;
+    /** A notice shown when logged in: now, or at the next login. */
+    private String pendingNotice;
 
     void startUp()
     {
@@ -154,6 +154,7 @@ final class Marking
         lastLine = null;
         keys.registerKeyListener(shiftListener);
         mouse.registerMouseWheelListener(wheelListener);
+        moveHoverPathMinimap();
         clientThread.invokeLater(this::copyOnce);
     }
 
@@ -183,8 +184,10 @@ final class Marking
         menus.addManagedCustomMenu(EXPORT, e -> exportTiles());
         menus.addManagedCustomMenu(IMPORT, e -> promptImport());
         menus.addManagedCustomMenu(SYNC, e -> sync());
-        menus.addManagedCustomMenu(CLEAR, e -> promptClear());
-        menus.addManagedCustomMenu(CLEAR_LINES, e -> promptClearLines());
+        menus.addManagedCustomMenu(CLEAR, e -> promptClear("marked tile", "You have no marked tiles to clear.", sources::tiles,
+            r -> saveTiles(r, Collections.emptyList()), () -> { }));
+        menus.addManagedCustomMenu(CLEAR_LINES, e -> promptClear("line", "You have no lines to clear here.", sources::lines,
+            r -> saveLines(r, Collections.emptyList()), () -> { lastLine = null; extendFrom = null; extendAt = null; }));
     }
 
     @Subscribe
@@ -219,12 +222,28 @@ final class Marking
         if (region < 0) { return; }
         List<MarkerSources.TilePoint> was = MarkerSources.parse(gson, before), now = MarkerSources.parse(gson, after);
         List<MarkerSources.TilePoint> points = new ArrayList<>(sources.tiles(region));
-        boolean changed = points.removeIf(p -> was.stream().anyMatch(p::same) && now.stream().noneMatch(p::same));
-        for (MarkerSources.TilePoint p : now)
+        if (follow(points, was, now, MarkerSources.TilePoint::same, p -> p.regionId == region)) { saveTiles(region, points); }
+    }
+
+    /**
+     * Another plugin's marks changed from was to now: what it lost leaves points, what it gained (and accept takes) joins
+     * them unless there already. Returns whether points changed.
+     */
+    private static <T> boolean follow(List<T> points, List<T> was, List<T> now, BiPredicate<T, T> same, Predicate<T> accept)
+    {
+        boolean changed = points.removeIf(p -> indexOf(was, p, same) >= 0 && indexOf(now, p, same) < 0);
+        for (T p : now)
         {
-            if (p.regionId == region && was.stream().noneMatch(p::same) && points.stream().noneMatch(p::same)) { points.add(p); changed = true; }
+            if (accept.test(p) && indexOf(was, p, same) < 0 && indexOf(points, p, same) < 0) { points.add(p); changed = true; }
         }
-        if (changed) { saveTiles(region, points); }
+        return changed;
+    }
+
+    /** Where the list has the same as p, or -1. */
+    private static <T> int indexOf(List<T> list, T p, BiPredicate<T, T> same)
+    {
+        for (int i = 0; i < list.size(); i++) { if (same.test(list.get(i), p)) { return i; } }
+        return -1;
     }
 
     /** Object Markers' objects of a region changed: as followTiles. */
@@ -234,12 +253,7 @@ final class Marking
         if (region < 0) { return; }
         List<ObjectMarkerSource.ObjectPoint> was = ObjectMarkerSource.parse(gson, before), now = ObjectMarkerSource.parse(gson, after);
         List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
-        boolean changed = points.removeIf(p -> was.stream().anyMatch(p::same) && now.stream().noneMatch(p::same));
-        for (ObjectMarkerSource.ObjectPoint p : now)
-        {
-            if (was.stream().noneMatch(p::same) && points.stream().noneMatch(p::same)) { points.add(p); changed = true; }
-        }
-        if (changed) { saveObjects(region, points); }
+        if (follow(points, was, now, ObjectMarkerSource.ObjectPoint::same, p -> true)) { saveObjects(region, points); }
     }
 
     /** NPC Indicators' names changed: new names are tagged here as Sync tags them, names it lost leave every list here. */
@@ -266,28 +280,41 @@ final class Marking
         NpcStyle style = null;
         for (NpcStyle s : NpcStyle.values()) { if (BETTER_NPC_HIGHLIGHT_STYLES[s.ordinal()].equals(option)) { style = s; } }
         if (style == null) { return; }
-        Set<String> now = betterNames(after, ids);
+        Set<String> now = lower(betterNames(after, ids));
         NameLists lists = new NameLists();
-        for (String name : betterNames(before, ids)) { if (!now.contains(name)) { lists.set(style, name, false); } }
+        for (String name : betterNames(before, ids)) { if (!now.contains(name.toLowerCase())) { lists.set(style, name, false); } }
         lists.save();
         copyBetterNpcHighlight();
     }
 
-    /** The names in one of Better NPC Highlight's lists (names, or IDs as the NPCs' names), lower case. */
-    private Set<String> betterNames(String list, boolean ids)
+    /** Better NPC Highlight's lists are split at commas not escaped with a backslash. */
+    private static final Pattern UNESCAPED_COMMA = Pattern.compile("(?<!\\\\),");
+
+    /**
+     * The names in one of Better NPC Highlight's lists (names, or IDs as the NPCs' names) as written there, without tags
+     * or a preset (":2"). A name with an escaped comma is left out: no list here can hold it.
+     */
+    private List<String> betterNames(String list, boolean ids)
     {
-        Set<String> names = new HashSet<>();
-        for (String entry : list == null ? new String[0] : list.split(ids ? "," : "(?<!\\\\),"))
+        List<String> names = new ArrayList<>();
+        for (String entry : list == null ? new String[0] : ids ? list.split(",") : UNESCAPED_COMMA.split(list))
         {
-            String name = entry.split(":")[0].trim();
+            String name = Text.removeTags(entry.split(":")[0]).trim();
             if (ids)
             {
                 try { name = npcName(Integer.parseInt(name)); } catch (NumberFormatException ex) { name = null; }
             }
-            else { name = Text.removeTags(name).toLowerCase(); }
             if (name != null && !name.isEmpty() && !name.contains("\\")) { names.add(name); }
         }
         return names;
+    }
+
+    /** Names in lower case, each once. */
+    private static Set<String> lower(List<String> names)
+    {
+        Set<String> lower = new HashSet<>();
+        for (String n : names) { lower.add(n.toLowerCase()); }
+        return lower;
     }
 
     /** Line Markers' lines changed: new lines of its shown groups are added here, lines it lost are taken away here. */
@@ -300,21 +327,9 @@ final class Marking
         for (int region : regions.keySet())
         {
             List<MarkerSources.LinePoint> lines = new ArrayList<>(sources.lines(region));
-            boolean changed = lines.removeIf(l -> was.stream().anyMatch(l::same) && now.stream().noneMatch(l::same));
-            for (MarkerSources.LinePoint p : now)
-            {
-                if (p.regionId == region && was.stream().noneMatch(p::same) && lines.stream().noneMatch(p::same)) { lines.add(p); changed = true; }
-            }
-            if (changed) { saveLines(region, lines); }
+            if (follow(lines, was, now, MarkerSources.LinePoint::same, p -> p.regionId == region)) { saveLines(region, lines); }
         }
     }
-
-    /**
-     * A profile switch: its settings are moved and the other plugins' marks taken over at the next game tick or login.
-     * RuneLite handles the switch after this and stops the plugin in a profile where it is off or not installed, which
-     * then got them all the same.
-     */
-    private volatile boolean profileSwitched;
 
     @Subscribe
     public void onProfileChanged(ProfileChanged e)
@@ -329,7 +344,28 @@ final class Marking
     private void afterProfileSwitch()
     {
         profileSwitched = false;
+        moveHoverPathMinimap();
         copyOnce();
+    }
+
+    /**
+     * The hover path's Show on minimap is gone: Display (Never by default) and Draw location(s) alone say where it shows.
+     * Once per profile they are set so that it shows where it did: on the minimap only with Show on minimap on.
+     */
+    private void moveHoverPathMinimap()
+    {
+        String group = HdWorldMarkersConfig.GROUP;
+        if (configs.getConfiguration(group, HOVER_PATH_MOVED) != null) { return; }
+        configs.setConfiguration(group, HOVER_PATH_MOVED, "true");
+        String where = configs.getConfiguration(group, "hoverPathDrawLocations");
+        boolean minimap = "true".equals(configs.getConfiguration(group, "hoverPathMinimap"));
+        configs.unsetConfiguration(group, "hoverPathMinimap");
+        // Before, an unsaved Display was Always and an unsaved Draw location(s) Minimap.
+        if ("NEVER".equals(configs.getConfiguration(group, "hoverPathDisplaySetting"))) { return; }
+        boolean world = "GAME_WORLD".equals(where) || "BOTH".equals(where), map = minimap && !"GAME_WORLD".equals(where);
+        if (!world && !map) { configs.setConfiguration(group, "hoverPathDisplaySetting", "NEVER"); return; }
+        if (configs.getConfiguration(group, "hoverPathDisplaySetting") == null) { configs.setConfiguration(group, "hoverPathDisplaySetting", "ALWAYS"); }
+        configs.setConfiguration(group, "hoverPathDrawLocations", world && map ? "BOTH" : world ? "GAME_WORLD" : "MINIMAP");
     }
 
     @Subscribe
@@ -358,6 +394,23 @@ final class Marking
         else if (action == MenuAction.EXAMINE_NPC && config.tagNpcs()) { npcOptions(event); }
     }
 
+    private static WidgetMenuOption orb(String option)
+    {
+        return new WidgetMenuOption(option, "HD World Markers", InterfaceID.Orbs.WORLDMAP, InterfaceID.OrbsNomap.WORLDMAP);
+    }
+
+    /** One of our options on the right-click menu, at this index, on this target. */
+    private MenuEntry entry(int index, String option, String target)
+    {
+        return client.getMenu().createMenuEntry(index).setOption(option).setTarget(target).setType(MenuAction.RUNELITE);
+    }
+
+    /** An option in one of our submenus. */
+    private static void add(Menu menu, int index, String option, Consumer<MenuEntry> click)
+    {
+        menu.createMenuEntry(index).setOption(option).setType(MenuAction.RUNELITE).onClick(click);
+    }
+
     // Tiles
 
     private void tileOptions(MenuEntry entry)
@@ -367,12 +420,10 @@ final class Marking
         if (tile == null) { return; }
         WorldPoint point = WorldPoint.fromLocalInstance(client, tile.getLocalLocation());
         MarkerSources.TilePoint marked = tile(point);
-        client.getMenu().createMenuEntry(-1).setOption(marked != null ? "HD Unmark" : "HD Mark").setTarget(TILE)
-            .setType(MenuAction.RUNELITE).onClick(e -> markTile(point));
+        entry(-1, marked != null ? "HD Unmark" : "HD Mark", TILE).onClick(e -> markTile(point));
         if (marked != null)
         {
-            client.getMenu().createMenuEntry(-2).setOption("HD Label").setTarget(TILE)
-                .setType(MenuAction.RUNELITE).onClick(e -> labelTile(marked));
+            entry(-2, "HD Label", TILE).onClick(e -> labelTile(marked));
             tileColorMenu(marked);
         }
     }
@@ -380,11 +431,11 @@ final class Marking
     /** Ground Markers' Color menu: Reset all (the region's tiles), Pick, and the colors in use. */
     private void tileColorMenu(MarkerSources.TilePoint marked)
     {
-        Menu colors = client.getMenu().createMenuEntry(-3).setOption("HD Color").setTarget(TILE).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu colors = entry(-3, "HD Color", TILE).createSubMenu();
         List<MarkerSources.TilePoint> region = sources.tiles(marked.regionId);
         if (region.size() > 1)
         {
-            colors.createMenuEntry(-1).setOption("Reset all").setType(MenuAction.RUNELITE).onClick(e -> chatbox
+            add(colors, -1, "Reset all", e -> chatbox
                 .openTextMenuInput("Are you sure you want to reset the color of " + region.size() + " tiles?")
                 .option("Yes", () -> clientThread.invokeLater(() -> {
                     List<MarkerSources.TilePoint> reset = new ArrayList<>();
@@ -399,13 +450,12 @@ final class Marking
         }
         if (marked.color != null)
         {
-            colors.createMenuEntry(-1).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> colorTile(marked, null));
+            add(colors, -1, "Reset", e -> colorTile(marked, null));
         }
-        colors.createMenuEntry(-1).setOption("Pick").setType(MenuAction.RUNELITE)
-            .onClick(e -> pick(marked.color != null ? marked.color : config.tileColor(), "Tile marker color", c -> colorTile(marked, c)));
+        add(colors, -1, "Pick", e -> pick(marked.color != null ? marked.color : config.tileColor(), "Tile marker color", c -> colorTile(marked, c)));
         List<Color> used = new ArrayList<>();
-        WorldView wv = client.getTopLevelWorldView();
-        for (int r : wv == null || wv.getMapRegions() == null ? new int[0] : wv.getMapRegions())
+        int[] regions = mapRegions();
+        for (int r : regions == null ? new int[0] : regions)
         {
             for (MarkerSources.TilePoint p : sources.tiles(r))
             {
@@ -414,7 +464,7 @@ final class Marking
         }
         for (Color c : used)
         {
-            colors.createMenuEntry(-1).setOption(ColorUtil.prependColorTag("Color", c)).setType(MenuAction.RUNELITE).onClick(e -> colorTile(marked, c));
+            add(colors, -1, ColorUtil.prependColorTag("Color", c), e -> colorTile(marked, c));
         }
     }
 
@@ -435,14 +485,14 @@ final class Marking
         MarkerSources.LinePoint last = lastLineOn(point);
         if (last != null)
         {
-            client.getMenu().createMenuEntry(-1).setOption("HD Remove line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> removeLine(last));
+            entry(-1, "HD Remove line", TILE).onClick(e -> removeLine(last));
         }
         if (!config.markLines()) { return; }
-        client.getMenu().createMenuEntry(-1).setOption("HD Add line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> addLine(point));
+        entry(-1, "HD Add line", TILE).onClick(e -> addLine(point));
         List<WorldPoint> run = extendRun(point);
         if (run != null)
         {
-            client.getMenu().createMenuEntry(-3).setOption("HD Extend line").setTarget(TILE).setType(MenuAction.RUNELITE).onClick(e -> extendLine(run));
+            entry(-3, "HD Extend line", TILE).onClick(e -> extendLine(run));
         }
     }
 
@@ -613,8 +663,7 @@ final class Marking
     /** The marked tiles of the loaded area to the clipboard, as Ground Markers' Export. */
     private void exportTiles()
     {
-        WorldView wv = client.getTopLevelWorldView();
-        int[] regions = wv == null ? null : wv.getMapRegions();
+        int[] regions = mapRegions();
         if (regions == null) { return; }
         List<MarkerSources.TilePoint> points = new ArrayList<>();
         for (int region : regions) { points.addAll(sources.tiles(region)); }
@@ -627,51 +676,37 @@ final class Marking
         message(points.size() + " marked tiles were copied to your clipboard.");
     }
 
-    /** Ground Markers' Clear: the marked tiles of the loaded area, after a confirmation. */
-    private void promptClear()
+    /**
+     * Ground Markers' Clear for the marked tiles or lines (what) of the loaded area, after a confirmation: each region's
+     * cleared, then after runs. none says there are none.
+     */
+    private void promptClear(String what, String none, IntFunction<List<?>> saved, IntConsumer clear, Runnable after)
     {
-        WorldView wv = client.getTopLevelWorldView();
-        int[] regions = wv == null ? null : wv.getMapRegions();
+        int[] regions = mapRegions();
         if (regions == null) { return; }
         int n = 0;
-        for (int region : regions) { n += sources.tiles(region).size(); }
+        for (int region : regions) { n += saved.apply(region).size(); }
         if (n == 0)
         {
-            message("You have no marked tiles to clear.");
+            message(none);
             return;
         }
         int cleared = n;
-        chatbox.openTextMenuInput("Are you sure you want to clear the<br>" + n + " marked tiles of this area?")
+        chatbox.openTextMenuInput("Are you sure you want to clear the<br>" + n + " " + what + "s of this area?")
             .option("Yes", () -> clientThread.invokeLater(() -> {
-                for (int region : regions) { saveTiles(region, Collections.emptyList()); }
-                message(cleared + (cleared == 1 ? " marked tile was cleared." : " marked tiles were cleared."));
+                for (int region : regions) { clear.accept(region); }
+                after.run();
+                message(cleared + " " + what + (cleared == 1 ? " was cleared." : "s were cleared."));
             }))
             .option("No", () -> { })
             .build();
     }
 
-    /** The lines of the loaded area, after a confirmation. */
-    private void promptClearLines()
+    /** The loaded area's map regions, or null. */
+    private int[] mapRegions()
     {
         WorldView wv = client.getTopLevelWorldView();
-        int[] regions = wv == null ? null : wv.getMapRegions();
-        if (regions == null) { return; }
-        int n = 0;
-        for (int region : regions) { n += sources.lines(region).size(); }
-        if (n == 0)
-        {
-            message("You have no lines to clear here.");
-            return;
-        }
-        int cleared = n;
-        chatbox.openTextMenuInput("Are you sure you want to clear the<br>" + n + " lines of this area?")
-            .option("Yes", () -> clientThread.invokeLater(() -> {
-                for (int region : regions) { saveLines(region, Collections.emptyList()); }
-                lastLine = null; extendFrom = null; extendAt = null;
-                message(cleared + (cleared == 1 ? " line was cleared." : " lines were cleared."));
-            }))
-            .option("No", () -> { })
-            .build();
+        return wv == null ? null : wv.getMapRegions();
     }
 
     /** Tiles from the clipboard (Ground Markers' Export, or this one's), after a confirmation. */
@@ -721,8 +756,7 @@ final class Marking
             int before = changed;
             for (MarkerSources.TilePoint p : region.getValue())
             {
-                int at = -1;
-                for (int i = 0; i < merged.size() && at < 0; i++) { if (merged.get(i).same(p)) { at = i; } }
+                int at = indexOf(merged, p, MarkerSources.TilePoint::same);
                 if (at < 0) { merged.add(p); changed++; continue; }
                 if (!theirs) { continue; }
                 MarkerSources.TilePoint own = merged.get(at);
@@ -906,8 +940,8 @@ final class Marking
             int better = 0;
             for (String option : BETTER_NPC_HIGHLIGHT_STYLES)
             {
-                better += betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Names"), false).size()
-                    + betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids"), true).size();
+                better += lower(betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Names"), false)).size()
+                    + lower(betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids"), true)).size();
             }
             parts.add("Better NPC Highlight " + better + (better == 1 ? " name" : " names"));
         }
@@ -964,7 +998,7 @@ final class Marking
         List<MarkerSources.LinePoint> lines = new ArrayList<>();
         if (Strings.isNullOrEmpty(json)) { return lines; }
         List<TheirGroup> groups;
-        try { groups = gson.fromJson(json, new com.google.gson.reflect.TypeToken<List<TheirGroup>>() { }.getType()); }
+        try { groups = gson.fromJson(json, new TypeToken<List<TheirGroup>>() { }.getType()); }
         catch (RuntimeException ex) { return lines; }
         for (TheirGroup group : groups == null ? Collections.<TheirGroup>emptyList() : groups)
         {
@@ -993,8 +1027,7 @@ final class Marking
             int before = added;
             for (MarkerSources.LinePoint p : region.getValue())
             {
-                int at = -1;
-                for (int i = 0; i < merged.size() && at < 0; i++) { if (merged.get(i).same(p)) { at = i; } }
+                int at = indexOf(merged, p, MarkerSources.LinePoint::same);
                 if (at < 0) { merged.add(p); added++; }
                 // Here already: Line Markers' colour and width when they differ.
                 else if (!Objects.equals(merged.get(at).color, p.color) || merged.get(at).width != p.width) { merged.set(at, p); added++; }
@@ -1036,7 +1069,7 @@ final class Marking
         for (int id : ids(NPC_INDICATORS, "tagstyle_"))
         {
             String name = npcName(id);
-            NpcStyle style = name == null ? null : style(configs.getConfiguration(NPC_INDICATORS, "tagstyle_" + id));
+            NpcStyle style = name == null ? null : NpcStyle.bySaved(configs.getConfiguration(NPC_INDICATORS, "tagstyle_" + id));
             if (style != null) { idStyles.computeIfAbsent(name, k -> EnumSet.noneOf(NpcStyle.class)).add(style); }
         }
         Set<NpcStyle> on = npcIndicatorsStyles();
@@ -1112,24 +1145,13 @@ final class Marking
         {
             String option = BETTER_NPC_HIGHLIGHT_STYLES[style.ordinal()];
             if ("false".equals(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Highlight"))) { continue; }
-            String list = configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Names");
-            for (String entry : list == null ? new String[0] : list.split("(?<!\\\\),"))
+            List<String> names = betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Names"), false);
+            names.addAll(betterNames(configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids"), true));
+            for (String name : names)
             {
-                String name = Text.removeTags(entry.split(":")[0]).trim();
-                // A name with an escaped comma cannot go into a list here.
-                if (name.isEmpty() || name.contains("\\") || lists.has(style, name)) { continue; }
+                if (lists.has(style, name)) { continue; }
                 lists.set(style, name, true);
                 added.add(name.toLowerCase());
-            }
-            String ids = configs.getConfiguration(BETTER_NPC_HIGHLIGHT, option + "Ids");
-            for (String entry : ids == null ? new String[0] : ids.split(","))
-            {
-                String name;
-                try { name = npcName(Integer.parseInt(entry.split(":")[0].trim())); }
-                catch (NumberFormatException ex) { continue; }
-                if (name == null || lists.has(style, name)) { continue; }
-                lists.set(style, name, true);
-                added.add(name);
             }
         }
         lists.save();
@@ -1150,57 +1172,45 @@ final class Marking
     {
         MenuEntry entry = event.getMenuEntry();
         WorldView wv = client.getWorldView(entry.getWorldViewId());
-        TileObject object = wv == null ? null : findTileObject(wv, event.getActionParam0(), event.getActionParam1(), event.getIdentifier());
+        TileObject object = wv == null ? null : targets.object(entry);
         if (object == null) { return; }
         ObjectMarkerSource.Marked marked = objects.find(object);
-        client.getMenu().createMenuEntry(-1)
-            .setOption(marked != null ? "HD Unmark object" : "HD Mark object")
-            .setTarget(event.getTarget())
-            .setWorldViewId(entry.getWorldViewId())
-            .setParam0(event.getActionParam0())
-            .setParam1(event.getActionParam1())
-            .setIdentifier(event.getIdentifier())
-            .setType(MenuAction.RUNELITE)
-            .onClick(this::markObject);
+        entry(-1, marked != null ? "HD Unmark object" : "HD Mark object", event.getTarget()).setWorldViewId(entry.getWorldViewId())
+            .setParam0(event.getActionParam0()).setParam1(event.getActionParam1()).setIdentifier(event.getIdentifier()).onClick(this::markObject);
         if (marked != null) { objectMenus(event.getTarget(), object, marked, wv.getMapRegions()); }
     }
 
     /** Object Markers' Mark border color, Mark fill color and Mark style menus. */
     private void objectMenus(String target, TileObject object, ObjectMarkerSource.Marked marked, int[] regions)
     {
-        Menu border = client.getMenu().createMenuEntry(-2).setOption("HD Mark border color").setTarget(target)
-            .setType(MenuAction.RUNELITE).createSubMenu();
+        Menu border = entry(-2, "HD Mark border color", target).createSubMenu();
         for (Color c : withDefaults(objects.usedColors(regions, false), 1))
         {
-            border.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
-                .onClick(e -> updateObject(object, p -> p.borderColor = c));
+            add(border, 0, ColorUtil.prependColorTag("Set color", c), e -> updateObject(object, p -> p.borderColor = c));
         }
-        border.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE).onClick(e -> pick(
+        add(border, 0, "Pick color", e -> pick(
             marked.borderColor != null ? marked.borderColor : config.objectColor(), "Mark Border Color", c -> updateObject(object, p -> p.borderColor = c)));
         if (marked.borderColor != null)
         {
-            border.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.borderColor = null));
+            add(border, 0, "Reset", e -> updateObject(object, p -> p.borderColor = null));
         }
 
-        Menu fill = client.getMenu().createMenuEntry(-3).setOption("HD Mark fill color").setTarget(target)
-            .setType(MenuAction.RUNELITE).createSubMenu();
+        Menu fill = entry(-3, "HD Mark fill color", target).createSubMenu();
         for (Color c : withDefaults(objects.usedColors(regions, true), 12))
         {
-            fill.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
-                .onClick(e -> updateObject(object, p -> p.fillColor = c));
+            add(fill, 0, ColorUtil.prependColorTag("Set color", c), e -> updateObject(object, p -> p.fillColor = c));
         }
         // The fill differs per style; the hull's default (a=50) to start from.
-        fill.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE).onClick(e -> pick(
+        add(fill, 0, "Pick color", e -> pick(
             marked.fillColor != null ? marked.fillColor : Marker.BLACK_FILL, "Mark Fill Color", c -> updateObject(object, p -> p.fillColor = c)));
-        fill.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.fillColor = null));
+        add(fill, 0, "Reset", e -> updateObject(object, p -> p.fillColor = null));
 
-        Menu style = client.getMenu().createMenuEntry(-4).setOption("HD Mark style").setTarget(target)
-            .setType(MenuAction.RUNELITE).createSubMenu();
-        style.createMenuEntry(0).setOption("Hull").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.hull = p.hull != Boolean.TRUE));
-        style.createMenuEntry(0).setOption("Outline").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.outline = p.outline != Boolean.TRUE));
-        style.createMenuEntry(0).setOption("Clickbox").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.clickbox = p.clickbox != Boolean.TRUE));
-        style.createMenuEntry(0).setOption("Tile").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> p.tile = p.tile != Boolean.TRUE));
-        style.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateObject(object, p -> {
+        Menu style = entry(-4, "HD Mark style", target).createSubMenu();
+        add(style, 0, "Hull", e -> updateObject(object, p -> p.hull = p.hull != Boolean.TRUE));
+        add(style, 0, "Outline", e -> updateObject(object, p -> p.outline = p.outline != Boolean.TRUE));
+        add(style, 0, "Clickbox", e -> updateObject(object, p -> p.clickbox = p.clickbox != Boolean.TRUE));
+        add(style, 0, "Tile", e -> updateObject(object, p -> p.tile = p.tile != Boolean.TRUE));
+        add(style, 0, "Reset", e -> updateObject(object, p -> {
             p.hull = null; p.outline = null; p.clickbox = null; p.tile = null;
         }));
     }
@@ -1240,8 +1250,7 @@ final class Marking
 
     private void markObject(MenuEntry entry)
     {
-        WorldView wv = client.getWorldView(entry.getWorldViewId());
-        TileObject object = wv == null ? null : findTileObject(wv, entry.getParam0(), entry.getParam1(), entry.getIdentifier());
+        TileObject object = targets.object(entry);
         if (object == null) { return; }
         // The object's id is its base id; the composition is the object as it is seen now.
         ObjectComposition composition = composition(object);
@@ -1259,33 +1268,6 @@ final class Marking
 
     private void saveObjects(int region, List<ObjectMarkerSource.ObjectPoint> points) { save(ObjectMarkerSource.KEY + region, points, points.isEmpty()); }
 
-    /** The object with this id on a scene tile, as Object Markers' findTileObject. */
-    private TileObject findTileObject(WorldView wv, int x, int y, int id)
-    {
-        Scene scene = wv.getScene();
-        Tile[][][] tiles = scene == null ? null : scene.getTiles();
-        int plane = wv.getPlane();
-        if (tiles == null || x < 0 || y < 0 || x >= tiles[plane].length || y >= tiles[plane][x].length) { return null; }
-        Tile tile = tiles[plane][x][y];
-        if (tile == null) { return null; }
-        if (idEquals(tile.getWallObject(), id)) { return tile.getWallObject(); }
-        if (idEquals(tile.getDecorativeObject(), id)) { return tile.getDecorativeObject(); }
-        if (idEquals(tile.getGroundObject(), id)) { return tile.getGroundObject(); }
-        for (GameObject object : tile.getGameObjects()) { if (idEquals(object, id)) { return object; } }
-        return null;
-    }
-
-    /** Examine sends the id of the object as it is seen (a multiloc's current form), not its base id. */
-    private boolean idEquals(TileObject object, int id)
-    {
-        if (object == null) { return false; }
-        if (object.getId() == id) { return true; }
-        ObjectComposition composition = client.getObjectDefinition(object.getId());
-        int[] impostors = composition == null ? null : composition.getImpostorIds();
-        if (impostors != null) { for (int impostor : impostors) { if (impostor == id) { return true; } } }
-        return false;
-    }
-
     // NPCs
 
     private void npcOptions(MenuEntryAdded event)
@@ -1298,11 +1280,7 @@ final class Marking
         // A name matched by a pattern (with *) has no Tag-All: Un-tag-All cannot remove the pattern. No Tag styles: no Tag-All.
         if (!pattern && (tagged || !tagStyles().isEmpty()))
         {
-            client.getMenu().createMenuEntry(-1)
-                .setOption(tagged ? "HD Un-tag-All" : "HD Tag-All")
-                .setTarget(event.getTarget())
-                .setType(MenuAction.RUNELITE)
-                .onClick(e -> tagAll(name));
+            entry(-1, tagged ? "HD Un-tag-All" : "HD Tag-All", event.getTarget()).onClick(e -> tagAll(name));
         }
         if (tagged || pattern) { npcMenus(event.getTarget(), name); }
         if (config.npcsInFrontOfTiles()) { inFrontOption(event.getTarget(), name); }
@@ -1314,7 +1292,7 @@ final class Marking
         List<String> names = MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT);
         boolean listed = names.stream().anyMatch(name::equalsIgnoreCase);
         if (!listed && names.stream().anyMatch(n -> n.contains("*") && WildcardMatcher.matches(n, name))) { return; }
-        client.getMenu().createMenuEntry(-1).setOption(listed ? "HD Not in front" : "HD In front").setTarget(target).setType(MenuAction.RUNELITE)
+        entry(-1, listed ? "HD Not in front" : "HD In front", target)
             .onClick(e -> {
                 List<String> now = new ArrayList<>(MarkerSources.names(configs, MarkerSources.NPC_IN_FRONT));
                 boolean removed = now.removeIf(name::equalsIgnoreCase);
@@ -1340,23 +1318,21 @@ final class Marking
         MarkerSources.NpcTag own = tags.get(Text.standardize(name));
         List<Color> used = new ArrayList<>();
         for (MarkerSources.NpcTag t : tags.values()) { offer(used, t.color); }
-        Menu colors = client.getMenu().createMenuEntry(-2).setOption("HD Tag color").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu colors = entry(-2, "HD Tag color", target).createSubMenu();
         for (Color c : withDefaults(used, 1))
         {
-            colors.createMenuEntry(0).setOption(ColorUtil.prependColorTag("Set color", c)).setType(MenuAction.RUNELITE)
-                .onClick(e -> updateNpc(name, t -> t.color = c));
+            add(colors, 0, ColorUtil.prependColorTag("Set color", c), e -> updateNpc(name, t -> t.color = c));
         }
-        colors.createMenuEntry(0).setOption("Pick color").setType(MenuAction.RUNELITE)
-            .onClick(e -> pick(own != null && own.color != null ? own.color : Color.WHITE, "Tag Color", c -> updateNpc(name, t -> t.color = c)));
+        add(colors, 0, "Pick color", e -> pick(own != null && own.color != null ? own.color : Color.WHITE, "Tag Color", c -> updateNpc(name, t -> t.color = c)));
         if (own != null && own.color != null)
         {
-            colors.createMenuEntry(0).setOption("Reset").setType(MenuAction.RUNELITE).onClick(e -> updateNpc(name, t -> t.color = null));
+            add(colors, 0, "Reset", e -> updateNpc(name, t -> t.color = null));
         }
-        Menu styles = client.getMenu().createMenuEntry(-3).setOption("HD Tag style").setTarget(target).setType(MenuAction.RUNELITE).createSubMenu();
+        Menu styles = entry(-3, "HD Tag style", target).createSubMenu();
         // Each puts the name in its style's list or takes it out.
         for (NpcStyle style : NpcStyle.values())
         {
-            styles.createMenuEntry(0).setOption(style.label).setType(MenuAction.RUNELITE).onClick(e -> {
+            add(styles, 0, style.label, e -> {
                 NameLists lists = new NameLists();
                 lists.set(style, name, !lists.has(style, name));
                 lists.save();
@@ -1422,17 +1398,7 @@ final class Marking
         }
     }
 
-    /** A style by the name NPC Indicators saves it under (tagstyle_), or null. */
-    private static NpcStyle style(String saved)
-    {
-        for (NpcStyle style : NpcStyle.values()) { if (style.saved.equals(saved)) { return style; } }
-        return null;
-    }
-
     private void message(String text) { Chat.send(chat, text, false); }
-
-    /** A notice shown when logged in: now, or at the next login. */
-    private String pendingNotice;
 
     private void notice(String text)
     {

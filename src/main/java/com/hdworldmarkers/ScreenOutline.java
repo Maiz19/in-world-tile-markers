@@ -1,6 +1,8 @@
 package com.hdworldmarkers;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.function.IntPredicate;
 
 /**
  * Border and fill triangles for a closed canvas polygon, with a depth per
@@ -17,6 +19,28 @@ final class ScreenOutline
     int[] a = new int[0], b = new int[0], c = new int[0];
     int vertices, faces, borderFaces;
     float minX, minY, maxX, maxY;
+
+    /** Scratch for cutOut: the piece being split and its two halves, as x, y, depth per point. */
+    private float[] piece = new float[3 * 64], inside = new float[3 * 64], outside = new float[3 * 64], part = new float[3 * 64];
+    /** Per face, the face of the geometry before cutOut it comes from (see load); and the one being cut. */
+    int[] source = new int[0];
+    private int current;
+    /**
+     * The points made for the face being cut, by place (to 1/64 pixel) and index: its pieces share their corners. A face
+     * makes a few tens at most, so a search through two arrays beats a map that boxes every key.
+     */
+    private long[] madeKey = new long[32];
+    private int[] madeAt = new int[32];
+    private int madeCount;
+    private int[] oa = new int[0], ob = oa, oc = oa, os = oa;
+    private int[] corners = new int[16];
+    /** After a cutOut: per face f, the points and faces made before it at 2f and 2f + 1; after the last face, the totals. */
+    int[] before = new int[0];
+    private int[] owner = new int[0], costVertices = new int[0], costFaces = new int[0];
+    /** Faces (by their face before cutOut) that cuts leave whole, or null for none. */
+    IntPredicate whole;
+    /** Points of the last split's inside part (in inside); the outside part is in outside, its count returned. */
+    private int splitInside;
 
     /**
      * Returns false for fewer than three points. The input may wind either
@@ -212,16 +236,6 @@ final class ScreenOutline
         return f + 1;
     }
 
-    /** Scratch for cutOut: the piece being split and its two halves, as x, y, depth per point. */
-    private float[] piece = new float[3 * 64], inside = new float[3 * 64], outside = new float[3 * 64], part = new float[3 * 64];
-    /** Per face, the face of the geometry before cutOut it comes from (see load); and the one being cut. */
-    int[] source = new int[0];
-    private int current;
-    /** The points made for the face being cut, by place (to 1/64 pixel): its pieces share their corners. */
-    private final java.util.Map<Long, Integer> made = new java.util.HashMap<>();
-    private int[] oa = new int[0], ob = oa, oc = oa, os = oa;
-    private int[] corners = new int[16];
-
     /** Takes these points {x, y, depth} and faces as they are, each face its own source, with their bounds. */
     void load(float[] px, float[] py, float[] pd, int n, int[] fa, int[] fb, int[] fc, int nf)
     {
@@ -243,10 +257,6 @@ final class ScreenOutline
         }
     }
 
-    /** After a cutOut: per face f, the points and faces made before it at 2f and 2f + 1; after the last face, the totals. */
-    int[] before = new int[0];
-    private int[] owner = new int[0], costVertices = new int[0], costFaces = new int[0];
-
     /**
      * As before, after one or more cutOuts of geometry loaded with originalVertices points and originalFaces faces: per
      * original face, the points made for it (each new point counted for the first face it serves) and the faces it became.
@@ -256,9 +266,9 @@ final class ScreenOutline
         if (before.length < 2 * originalFaces + 2) { before = new int[4 * originalFaces + 4]; }
         if (costVertices.length < originalFaces) { costVertices = new int[originalFaces * 2]; costFaces = new int[originalFaces * 2]; }
         if (owner.length < vertices) { owner = new int[vertices * 2]; }
-        java.util.Arrays.fill(costVertices, 0, originalFaces, 0);
-        java.util.Arrays.fill(costFaces, 0, originalFaces, 0);
-        java.util.Arrays.fill(owner, 0, vertices, -1);
+        Arrays.fill(costVertices, 0, originalFaces, 0);
+        Arrays.fill(costFaces, 0, originalFaces, 0);
+        Arrays.fill(owner, 0, vertices, -1);
         for (int f = 0; f < faces; f++)
         {
             int src = source[f];
@@ -284,9 +294,6 @@ final class ScreenOutline
      * points, or leave fewer than maxFaces faces for the faces after it, stays whole. Returns whether the box meets the
      * geometry at all.
      */
-    /** Faces (by their face before cutOut) that cuts leave whole, or null for none. */
-    java.util.function.IntPredicate whole;
-
     boolean cutOut(PlayerCut keep, int maxVertices, int maxFaces)
     {
         if (keep.maxX < minX || keep.minX > maxX || keep.maxY < minY || keep.minY > maxY) { return false; }
@@ -321,7 +328,7 @@ final class ScreenOutline
     /** Cuts one face (points v1, v2, v3): what lies outside the box (hx, hy), and inside it what lies in the pieces. */
     private void cut(PlayerCut keep, float[] hx, float[] hy, int v1, int v2, int v3)
     {
-        made.clear();
+        madeCount = 0;
         float fMinX = Math.min(x[v1], Math.min(x[v2], x[v3])), fMaxX = Math.max(x[v1], Math.max(x[v2], x[v3]));
         float fMinY = Math.min(y[v1], Math.min(y[v2], y[v3])), fMaxY = Math.max(y[v1], Math.max(y[v2], y[v3]));
         if (fMaxX <= keep.minX || fMinX >= keep.maxX || fMaxY <= keep.minY || fMinY >= keep.maxY) { keep(v1, v2, v3); return; }
@@ -365,9 +372,6 @@ final class ScreenOutline
         }
     }
 
-    /** Points of the last split's inside part (in inside); the outside part is in outside, its count returned. */
-    private int splitInside;
-
     /** Splits the polygon src (count points) by the line from (ex, ey) to (fx, fy): inside is left of it for sign 1. */
     private int split(float[] src, int count, float ex, float ey, float fx, float fy)
     {
@@ -398,7 +402,7 @@ final class ScreenOutline
     private void ensureScratch(int points)
     {
         int room = (points + 8) * 3;
-        if (piece.length < room) { piece = java.util.Arrays.copyOf(piece, room * 2); }
+        if (piece.length < room) { piece = Arrays.copyOf(piece, room * 2); }
         if (inside.length < room) { inside = new float[room * 2]; }
         if (outside.length < room) { outside = new float[room * 2]; }
         if (part.length < room) { part = new float[room * 2]; }
@@ -432,18 +436,20 @@ final class ScreenOutline
         if (x.length < vertices + count)
         {
             int size = (vertices + count) * 2;
-            x = java.util.Arrays.copyOf(x, size); y = java.util.Arrays.copyOf(y, size); depth = java.util.Arrays.copyOf(depth, size);
+            x = Arrays.copyOf(x, size); y = Arrays.copyOf(y, size); depth = Arrays.copyOf(depth, size);
         }
         if (corners.length < count) { corners = new int[count * 2]; }
         for (int k = 0; k < count; k++)
         {
             long key = (long) Math.round(p[k * 3] * 64) << 32 ^ (Math.round(p[k * 3 + 1] * 64) & 0xffffffffL);
-            Integer at = made.get(key);
-            if (at == null)
+            int at = -1;
+            for (int m = 0; m < madeCount; m++) { if (madeKey[m] == key) { at = madeAt[m]; break; } }
+            if (at < 0)
             {
                 at = vertices;
                 x[vertices] = p[k * 3]; y[vertices] = p[k * 3 + 1]; depth[vertices] = p[k * 3 + 2]; vertices++;
-                made.put(key, at);
+                if (madeCount == madeKey.length) { madeKey = Arrays.copyOf(madeKey, madeCount * 2); madeAt = Arrays.copyOf(madeAt, madeCount * 2); }
+                madeKey[madeCount] = key; madeAt[madeCount++] = at;
             }
             corners[k] = at;
         }
@@ -456,8 +462,8 @@ final class ScreenOutline
         if (a.length < n)
         {
             int size = n * 2;
-            a = java.util.Arrays.copyOf(a, size); b = java.util.Arrays.copyOf(b, size); c = java.util.Arrays.copyOf(c, size);
+            a = Arrays.copyOf(a, size); b = Arrays.copyOf(b, size); c = Arrays.copyOf(c, size);
         }
-        if (source.length < a.length) { source = java.util.Arrays.copyOf(source, a.length); }
+        if (source.length < a.length) { source = Arrays.copyOf(source, a.length); }
     }
 }

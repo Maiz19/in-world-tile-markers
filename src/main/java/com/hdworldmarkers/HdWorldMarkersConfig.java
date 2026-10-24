@@ -36,6 +36,7 @@ package com.hdworldmarkers;
 import java.awt.Color;
 import java.util.EnumSet;
 import java.util.Set;
+import lombok.RequiredArgsConstructor;
 import net.runelite.client.config.*;
 
 /**
@@ -84,7 +85,7 @@ public interface HdWorldMarkersConfig extends Config
 
     // General
 
-    @Range(min = 8, max = 200)
+    @Range(min = 8, max = MarkerSources.MAX_DISTANCE)
     @ConfigItem(keyName = "distance", name = "Draw distance", description = "Maximum distance in tiles for saved markers. Your own tile, destination and paths are always drawn", position = 1, section = generalSection)
     default int distance() { return 200; }
 
@@ -105,13 +106,12 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "hdText", name = "Render text in HD", description = "Draw the text of marks in the game world like the marks themselves, sharp in stretched mode, instead of as 2D text", position = 0, section = textSection)
     default boolean hdText() { return true; }
 
+    @RequiredArgsConstructor
     enum TextFont
     {
         RUNESCAPE("RuneScape"), RUNESCAPE_BOLD("RuneScape bold"), RUNESCAPE_SMALL("RuneScape small"), SMOOTH("Smooth"), SMOOTH_BOLD("Smooth bold");
 
         final String label;
-
-        TextFont(String label) { this.label = label; }
 
         @Override public String toString() { return label; }
     }
@@ -123,13 +123,12 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "textSize", name = "Size", description = "Text size; 16 is RuneLite's", position = 2, section = textSection)
     default int textSize() { return 16; }
 
+    @RequiredArgsConstructor
     enum TextEdge
     {
         SHADOW("Shadow"), OUTLINE("Outline"), NONE("None");
 
         final String label;
-
-        TextEdge(String label) { this.label = label; }
 
         @Override public String toString() { return label; }
     }
@@ -191,6 +190,7 @@ public interface HdWorldMarkersConfig extends Config
     // NPCs
 
     /** The NPC styles, in NPC Indicators' Tag style order, then the clickbox; each keeps its own list of names. */
+    @RequiredArgsConstructor
     enum NpcStyle
     {
         HULL("Hull", "hull", "npcHullNames"),
@@ -205,9 +205,14 @@ public interface HdWorldMarkersConfig extends Config
         final String label, saved, key;
         final int bit = 1 << ordinal();
 
-        NpcStyle(String label, String saved, String key) { this.label = label; this.saved = saved; this.key = key; }
-
         @Override public String toString() { return label; }
+
+        /** A style by its saved name (NPC Indicators' tagstyle_, other plugins' messages), or null. */
+        static NpcStyle bySaved(String saved)
+        {
+            for (NpcStyle style : values()) { if (style.saved.equalsIgnoreCase(saved)) { return style; } }
+            return null;
+        }
     }
 
     @ConfigItem(keyName = "tagNpcs", name = "Tag option", description = "Shift + right-click an NPC: HD Tag-All or HD Un-tag-All, every NPC with its name", position = 0, section = npcSection)
@@ -298,7 +303,6 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "npcIgnorePets", name = "Ignore pets", description = "No highlight on pets", position = 4, section = npcSection)
     default boolean npcIgnorePets() { return true; }
 
-    @Alpha
     @ConfigItem(keyName = "npcsInFrontOfTiles", name = "Draw NPCs in front of marks (fps heavy)", description = "Tagged NPCs, and those under In front names, are drawn in front of the marks. Needs Through walls", position = 8, section = npcSection)
     default boolean npcsInFrontOfTiles() { return false; }
 
@@ -378,7 +382,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "destinationTileCornersOnly", name = "Corners only", description = "Draw only the corners of the destination tile.", position = 4, section = destinationSection)
     default boolean destinationTileCornersOnly() { return true; }
 
-    @ConfigItem(keyName = "destinationTileFadeout", name = "Fadeout", description = "Fade out the destination tile once you arrive.", position = 7, section = destinationSection)
+    @ConfigItem(keyName = "destinationTileFadeout", name = "Fadeout", description = "Fade out the destination tile once you arrive.", position = 6, section = destinationSection)
     default boolean destinationTileFadeout() { return false; }
 
     @Range(min = 0, max = 10000)
@@ -438,7 +442,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "currentTileCornersOnly", name = "Corners only", description = "Draw only the corners of the current tile.", position = 4, section = currentSection)
     default boolean currentTileCornersOnly() { return true; }
 
-    @ConfigItem(keyName = "currentTileFadeout", name = "Fadeout", description = "Fade out the true tile once the player stops moving.", position = 7, section = currentSection)
+    @ConfigItem(keyName = "currentTileFadeout", name = "Fadeout", description = "Fade out the true tile once the player stops moving.", position = 6, section = currentSection)
     default boolean currentTileFadeout() { return false; }
 
     @Range(min = 0, max = 10000)
@@ -487,25 +491,23 @@ public interface HdWorldMarkersConfig extends Config
     // Interact highlight, as RuneLite's Interact Highlight plugin
 
     /** What Interact highlight outlines. */
+    @RequiredArgsConstructor
     enum Interactable
     {
         NPCS("NPCs"), OBJECTS("Objects"), ITEMS("Ground items");
 
         final String label;
 
-        Interactable(String label) { this.label = label; }
-
         @Override public String toString() { return label; }
     }
 
     /** How Interact highlight marks what it highlights. */
+    @RequiredArgsConstructor
     enum InteractStyle
     {
         OUTLINE("Outline"), HULL("Hull"), CLICKBOX("Clickbox"), TILE("Tile"), TRUE_TILE("True tile");
 
         final String label;
-
-        InteractStyle(String label) { this.label = label; }
 
         @Override public String toString() { return label; }
     }
@@ -612,32 +614,32 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "activePathDrawMode", name = "Draw mode", description = "Marks the full path or only the target tile", position = 1, section = activePathSection)
     default DrawMode activePathDrawMode() { return DrawMode.FULL_PATH; }
 
-    @ConfigItem(keyName = "activePathMarkerStyle", name = "Marker Style", description = "Tiles or dots", position = 1, section = activePathSection)
+    @ConfigItem(keyName = "activePathMarkerStyle", name = "Marker Style", description = "Tiles or dots", position = 2, section = activePathSection)
     default MarkerStyle activePathMarkerStyle() { return MarkerStyle.TILE; }
 
     @Alpha
-    @ConfigItem(keyName = "activePathStroke1", name = "Main outline color", description = "Outline color of tiles you stand on", position = 2, section = activePathSection)
+    @ConfigItem(keyName = "activePathStroke1", name = "Main outline color", description = "Outline color of tiles you stand on", position = 3, section = activePathSection)
     default Color activePathStroke1() { return new Color(38, 38, 38, 69); }
 
     @Alpha
-    @ConfigItem(keyName = "activePathFill1", name = "Main fill color", description = "Fill color of tiles you stand on", position = 3, section = activePathSection)
+    @ConfigItem(keyName = "activePathFill1", name = "Main fill color", description = "Fill color of tiles you stand on", position = 4, section = activePathSection)
     default Color activePathFill1() { return new Color(13, 46, 10, 80); }
 
     @Alpha
-    @ConfigItem(keyName = "activePathStroke2", name = "Secondary outline color", description = "Outline color of tiles you run past without standing on them", position = 4, section = activePathSection)
+    @ConfigItem(keyName = "activePathStroke2", name = "Secondary outline color", description = "Outline color of tiles you run past without standing on them", position = 5, section = activePathSection)
     default Color activePathStroke2() { return new Color(38, 38, 38, 69); }
 
     @Alpha
-    @ConfigItem(keyName = "activePathFill2", name = "Secondary fill color", description = "Fill color of tiles you run past without standing on them", position = 5, section = activePathSection)
+    @ConfigItem(keyName = "activePathFill2", name = "Secondary fill color", description = "Fill color of tiles you run past without standing on them", position = 6, section = activePathSection)
     default Color activePathFill2() { return new Color(38, 38, 38, 80); }
 
-    @ConfigItem(keyName = "activePathDisplaySetting", name = "Display", description = "When to show the active path", position = 6, section = activePathSection)
+    @ConfigItem(keyName = "activePathDisplaySetting", name = "Display", description = "When to show the active path", position = 7, section = activePathSection)
     default PathDisplaySetting activePathDisplaySetting() { return PathDisplaySetting.ALWAYS; }
 
-    @ConfigItem(keyName = "displayKeybindActivePath", name = "Keybind", description = "Key for the display setting", position = 7, section = activePathSection)
+    @ConfigItem(keyName = "displayKeybindActivePath", name = "Keybind", description = "Key for the display setting", position = 8, section = activePathSection)
     default Keybind displayKeybindActivePath() { return Keybind.NOT_SET; }
 
-    @ConfigItem(keyName = "pathBorderWidth", name = "Border width", description = "Width of path tile borders, for both paths", position = 8, section = activePathSection)
+    @ConfigItem(keyName = "pathBorderWidth", name = "Border width", description = "Width of path tile borders, for both paths", position = 9, section = activePathSection)
     default double pathBorderWidth() { return 1; }
 
     // Path Marker, hover path
@@ -648,34 +650,31 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "hoverPathDrawMode", name = "Draw mode", description = "Marks the full path or only the target tile", position = 1, section = hoverPathSection)
     default DrawMode hoverPathDrawMode() { return DrawMode.FULL_PATH; }
 
-    @ConfigItem(keyName = "hoverPathMarkerStyle", name = "Marker Style", description = "Tiles or dots", position = 1, section = hoverPathSection)
+    @ConfigItem(keyName = "hoverPathMarkerStyle", name = "Marker Style", description = "Tiles or dots", position = 2, section = hoverPathSection)
     default MarkerStyle hoverPathMarkerStyle() { return MarkerStyle.TILE; }
 
     @Alpha
-    @ConfigItem(keyName = "hoverPathStroke1", name = "Main outline color", description = "Outline color of tiles you would stand on", position = 2, section = hoverPathSection)
+    @ConfigItem(keyName = "hoverPathStroke1", name = "Main outline color", description = "Outline color of tiles you would stand on", position = 3, section = hoverPathSection)
     default Color hoverPathStroke1() { return new Color(255, 0, 255, 255); }
 
     @Alpha
-    @ConfigItem(keyName = "hoverPathFill1", name = "Main fill color", description = "Fill color of tiles you would stand on", position = 3, section = hoverPathSection)
+    @ConfigItem(keyName = "hoverPathFill1", name = "Main fill color", description = "Fill color of tiles you would stand on", position = 4, section = hoverPathSection)
     default Color hoverPathFill1() { return new Color(255, 0, 255, 50); }
 
     @Alpha
-    @ConfigItem(keyName = "hoverPathStroke2", name = "Secondary outline color", description = "Outline color of tiles you would run past", position = 4, section = hoverPathSection)
+    @ConfigItem(keyName = "hoverPathStroke2", name = "Secondary outline color", description = "Outline color of tiles you would run past", position = 5, section = hoverPathSection)
     default Color hoverPathStroke2() { return new Color(0, 255, 0, 255); }
 
     @Alpha
-    @ConfigItem(keyName = "hoverPathFill2", name = "Secondary fill color", description = "Fill color of tiles you would run past", position = 5, section = hoverPathSection)
+    @ConfigItem(keyName = "hoverPathFill2", name = "Secondary fill color", description = "Fill color of tiles you would run past", position = 6, section = hoverPathSection)
     default Color hoverPathFill2() { return new Color(0, 255, 0, 50); }
 
-    @ConfigItem(keyName = "hoverPathDisplaySetting", name = "Display", description = "When to show the hover path", position = 6, section = hoverPathSection)
-    default PathDisplaySetting hoverPathDisplaySetting() { return PathDisplaySetting.ALWAYS; }
+    @ConfigItem(keyName = "hoverPathDisplaySetting", name = "Display", description = "When to show the hover path (never by default)", position = 7, section = hoverPathSection)
+    default PathDisplaySetting hoverPathDisplaySetting() { return PathDisplaySetting.NEVER; }
 
-    @ConfigItem(keyName = "displayKeybindHoverPath", name = "Keybind", description = "Key for the display setting", position = 7, section = hoverPathSection)
+    @ConfigItem(keyName = "displayKeybindHoverPath", name = "Keybind", description = "Key for the display setting", position = 8, section = hoverPathSection)
     default Keybind displayKeybindHoverPath() { return Keybind.NOT_SET; }
 
-    @ConfigItem(keyName = "hoverPathMinimap", name = "Show on minimap", description = "Also draw the hover path on the minimap", position = 9, section = hoverPathSection)
-    default boolean hoverPathMinimap() { return false; }
-
-    @ConfigItem(keyName = "drawOnlyIfNoActivePath", name = "Draw only if no active path", description = "Marks the hover path only if you don't have an active path visible", position = 8, section = hoverPathSection)
+    @ConfigItem(keyName = "drawOnlyIfNoActivePath", name = "Draw only if no active path", description = "Marks the hover path only if you don't have an active path visible", position = 9, section = hoverPathSection)
     default boolean drawOnlyIfNoActivePath() { return false; }
 }

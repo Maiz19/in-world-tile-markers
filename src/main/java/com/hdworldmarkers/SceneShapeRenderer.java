@@ -1,9 +1,12 @@
 package com.hdworldmarkers;
 
 import java.awt.Color;
+import java.awt.Shape;
 import java.util.*;
+import java.util.Deque;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 
@@ -24,6 +27,7 @@ import net.runelite.api.coords.LocalPoint;
  * dropped a different set of objects every frame.
  */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class SceneShapeRenderer
 {
     private static final int MIN_VERTICES = 64, MIN_FACES = 96, MIN_RADIUS = 256;
@@ -50,15 +54,21 @@ final class SceneShapeRenderer
     private long outlineNanos;
 
     /** Models no scene object uses now, kept for the next ones: making and uploading a model costs. */
-    private final java.util.Deque<Spare> spareCarriers = new ArrayDeque<>();
+    private final Deque<Spare> spareCarriers = new ArrayDeque<>();
+
+    /** FlatModel.layers per colour, alpha and lightness cap: a colour's HSL takes powers, for every shape every frame. */
+    private final Map<Long, int[]> layerCache = new HashMap<>();
+    /** The camera the client draws with now; the last one again while it has not changed (getModel asks per object). */
+    private volatile ModelShapes.Camera lastDrawCamera;
+    /** Scratch for ground: the tiles around an actor as faces. */
+    private float[] gx = new float[0], gy = new float[0], gz = new float[0];
 
     /** A model given up by its scene object, with what the next owner must clear of it. */
+    @RequiredArgsConstructor
     private static final class Spare
     {
         final Model model;
         final int radius, usedFaces, usedVertices;
-        Spare(Model model, int radius, int usedFaces, int usedVertices)
-        { this.model = model; this.radius = radius; this.usedFaces = usedFaces; this.usedVertices = usedVertices; }
     }
 
     /** Takes the scene object out of the scene and keeps its model as a spare, if there is room. */
@@ -295,9 +305,6 @@ final class SceneShapeRenderer
     private final float[] billboard = new float[5];
     private boolean billboarding;
 
-    @Inject
-    SceneShapeRenderer(Client client, CarrierModels carriers) { this.client = client; this.carriers = carriers; }
-
     /**
      * Starts a frame; canvasPerPixel converts screen pixels to canvas units (1 / stretch scale).
      * Shapes are rebuilt every frame: one that is not appended is simply not drawn. With xrayAnchor set
@@ -343,9 +350,11 @@ final class SceneShapeRenderer
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
         int height = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
         if (m.dot || m.offX != null) { return facing(m, at, level, height); }
-        if (m.edge >= 0) { return line(m, at, level, height); }
-        if (m.path != null) { return path(m, at, level, height); }
-        if (m.area != null) { return area(m, at, level, height); }
+        // A line along one side of the tile (between the side's corners), a line through the tile (Marker.path), both
+        // as wide as their border, or a filled shape (Marker.area) built as a tile's footprint is: on the ground.
+        if (m.edge >= 0) { return sampled(m, at, level, height, SIDES[Math.min(m.edge, SIDES.length - 1)], at.getX() - 64, at.getY() - 64, STRIP); }
+        if (m.path != null) { return sampled(m, at, level, height, m.path, at.getX(), at.getY(), PATH); }
+        if (m.area != null) { return sampled(m, at, level, height, m.area, at.getX(), at.getY(), AREA); }
         int w = m.width, h = m.height, n = 2 * (w + h);
         ensure(n);
         int x0 = at.getX() - w * 64, y0 = at.getY() - h * 64, k = 0;
@@ -375,54 +384,25 @@ final class SceneShapeRenderer
     /** Per side of a tile (HdWorldMarkersConfig.Edge order: west, east, south, north), its two corners from the tile's south-west corner. */
     static final int[][] SIDES = {{0, 0, 0, 128}, {128, 0, 128, 128}, {0, 0, 128, 0}, {0, 128, 128, 128}};
 
-    /** A line along one side of the tile, as wide as its border: a strip between the side's corners on the ground. */
-    private boolean line(Marker m, LocalPoint at, int level, int height)
-    {
-        WorldView wv = client.getTopLevelWorldView();
-        int[] side = SIDES[Math.min(m.edge, SIDES.length - 1)];
-        int x0 = at.getX() - 64, y0 = at.getY() - 64;
-        ensure(2);
-        int k = sample(wv, level, x0 + side[0], y0 + side[1], 0);
-        k = sample(wv, level, x0 + side[2], y0 + side[3], k);
-        if (k < 0)
-        {
-            camera.project(at.getX(), at.getY(), height, point);
-            return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
-        }
-        if (beside(2, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
-        return shape(m, at, level, outline.buildStrip(px, py, pd, 2, width(m.borderWidth)), Marker.NO_FILL);
-    }
+    /** The ways sampled shapes are built: a strip between points, a path through them, a filled area around them. */
+    private static final int STRIP = 0, PATH = 1, AREA = 2;
 
-    /** A line through the tile (Marker.path), as wide as its border: a strip through its points on the ground. */
-    private boolean path(Marker m, LocalPoint at, int level, int height)
+    /** A shape through points on the ground (x, y pairs from x0, y0), at the ground's height there, built as kind says. */
+    private boolean sampled(Marker m, LocalPoint at, int level, int height, int[] xy, int x0, int y0, int kind)
     {
         WorldView wv = client.getTopLevelWorldView();
-        int n = m.path.length / 2, k = 0;
+        int n = xy.length / 2, k = 0;
         ensure(n);
-        for (int i = 0; i < n; i++) { k = sample(wv, level, at.getX() + m.path[2 * i], at.getY() + m.path[2 * i + 1], k); }
+        for (int i = 0; i < n; i++) { k = sample(wv, level, x0 + xy[2 * i], y0 + xy[2 * i + 1], k); }
         if (k < 0)
         {
             camera.project(at.getX(), at.getY(), height, point);
             return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
         }
         if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
-        return shape(m, at, level, outline.buildPath(px, py, pd, n, width(m.borderWidth)), Marker.NO_FILL);
-    }
-
-    /** A filled shape on the ground (Marker.area), built as a tile's footprint is: its corners at the ground's height. */
-    private boolean area(Marker m, LocalPoint at, int level, int height)
-    {
-        WorldView wv = client.getTopLevelWorldView();
-        int n = m.area.length / 2, k = 0;
-        ensure(n);
-        for (int i = 0; i < n; i++) { k = sample(wv, level, at.getX() + m.area[2 * i], at.getY() + m.area[2 * i + 1], k); }
-        if (k < 0)
-        {
-            camera.project(at.getX(), at.getY(), height, point);
-            return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
-        }
-        if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
-        return shape(m, at, level, around(at, height, n, m.borderWidth), m.fill);
+        float w = width(m.borderWidth);
+        boolean built = kind == STRIP ? outline.buildStrip(px, py, pd, n, w) : kind == PATH ? outline.buildPath(px, py, pd, n, w) : around(at, height, n, m.borderWidth);
+        return shape(m, at, level, built, kind == AREA ? m.fill : Marker.NO_FILL);
     }
 
     /**
@@ -473,7 +453,6 @@ final class SceneShapeRenderer
     static final float[] DOT_X = new float[16], DOT_Y = new float[16];
     static { for (int i = 0; i < 16; i++) { DOT_X[i] = (float) Math.cos(i * Math.PI / 8) * 4; DOT_Y[i] = (float) Math.sin(i * Math.PI / 8) * 4; } }
 
-    /** The dot around the tile's centre, its size in screen pixels. */
     /**
      * A shape standing towards the camera around where the marker's point projects: Path Marker's dot in pixels, or a
      * timer pie (Marker.offX) in local units, scaled by the camera at its depth.
@@ -643,7 +622,7 @@ final class SceneShapeRenderer
             List<float[]> polygons = twoModels(t.object) ? null : clickbox(t, projected);
             if (polygons == null)
             {
-                java.awt.Shape shape = t.shape();
+                Shape shape = t.shape();
                 polygons = shape == null ? Collections.emptyList() : polygons(shape);
             }
             // A union of rectangles can enclose holes, wound the other way round; RuneLite leaves them unfilled
@@ -920,9 +899,6 @@ final class SceneShapeRenderer
         return true;
     }
 
-    /** FlatModel.layers per colour, alpha and lightness cap: a colour's HSL takes powers, for every shape every frame. */
-    private final Map<Long, int[]> layerCache = new HashMap<>();
-
     private void layers(Color color, int alpha, int[] out)
     {
         long key = (long) color.getRGB() << 9 | alpha << 1 | (hdLightnessCap ? 1 : 0);
@@ -936,9 +912,6 @@ final class SceneShapeRenderer
         }
         System.arraycopy(known, 0, out, 0, 3);
     }
-
-    /** The camera the client draws with now; the last one again while it has not changed (getModel asks per object). */
-    private volatile ModelShapes.Camera lastDrawCamera;
 
     private ModelShapes.Camera drawCamera()
     {
@@ -1165,36 +1138,15 @@ final class SceneShapeRenderer
     }
 
     /** The closed polygons of a canvas shape, as {x0, y0, x1, y1, ...}, without a repeated closing point. */
-    static java.util.List<float[]> polygons(java.awt.Shape shape)
+    static List<float[]> polygons(Shape shape)
     {
-        java.util.List<float[]> result = new ArrayList<>();
-        float[] coords = new float[6];
-        float[] current = new float[64];
-        int size = 0;
-        for (java.awt.geom.PathIterator it = shape.getPathIterator(null, 0.5); !it.isDone(); it.next())
+        List<float[]> result = new ArrayList<>();
+        for (double[] ring : OutlinePaint.rings(shape, 0.5, Double.MIN_VALUE))
         {
-            int type = it.currentSegment(coords);
-            if (type == java.awt.geom.PathIterator.SEG_MOVETO)
-            {
-                if (size >= 6) { result.add(Arrays.copyOf(current, size)); }
-                size = 0;
-            }
-            if (type == java.awt.geom.PathIterator.SEG_MOVETO || type == java.awt.geom.PathIterator.SEG_LINETO)
-            {
-                if (size >= 2 && current[size - 2] == coords[0] && current[size - 1] == coords[1]) { continue; }
-                if (size + 2 > current.length) { current = Arrays.copyOf(current, current.length * 2); }
-                current[size++] = coords[0];
-                current[size++] = coords[1];
-            }
-            if (type == java.awt.geom.PathIterator.SEG_CLOSE)
-            {
-                if (size >= 4 && current[0] == current[size - 2] && current[1] == current[size - 1]) { size -= 2; }
-                if (size >= 6) { result.add(Arrays.copyOf(current, size)); }
-                size = 0;
-            }
+            float[] p = new float[ring.length];
+            for (int i = 0; i < p.length; i++) { p[i] = (float) ring[i]; }
+            result.add(FloatClickbox.despur(p));
         }
-        if (size >= 6) { result.add(Arrays.copyOf(current, size)); }
-        result.replaceAll(FloatClickbox::despur);
         result.removeIf(Objects::isNull);
         return result;
     }
@@ -1440,7 +1392,8 @@ final class SceneShapeRenderer
             b.writeFaces(m, b.faces, b.fa, b.fb, b.fc, null, b.color, b.alpha);
             FlatModel.bounds(m);
         }
-        b.object.setLocation(new LocalPoint(anchorX, anchorY, b.worldView), b.level);
+        // As setLocation, without a new LocalPoint per bucket per frame.
+        b.object.setX(anchorX); b.object.setY(anchorY); b.object.setWorldView(b.worldView); b.object.setLevel(b.level);
         b.object.setZ(anchorZ);
         // Orientation 0 and the default radius 60 (tile centre +- 60) keep the footprint on its own tile; the model's
         // own fixed bounds cover the geometry.
@@ -1529,8 +1482,6 @@ final class SceneShapeRenderer
         }
     }
 
-    /** Scratch for ground: the tiles around an actor as faces. */
-    private float[] gx = new float[0], gy = new float[0], gz = new float[0];
     private int[] ga = new int[0], gb = new int[0], gc = new int[0];
 
     /**

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldArea;
@@ -21,6 +22,7 @@ import net.runelite.api.coords.WorldPoint;
  * Beyond the loaded area the client has no collision flags. For a predicted walk there (findBeyond, stepBeyond) they
  * are approximated from what a renderer's extended view shows: water and other blocked floor, walls, and objects.
  */
+// Not final: the tests spy on it, to count how often routes are found.
 class RouteFinder
 {
     /** Steps in the client's search order: west, east, south, north, south-west, south-east, north-west, north-east. */
@@ -416,6 +418,7 @@ class RouteFinder
      * What a route leads to, from its south-west tile: a tile, an object's footprint with its shape and rotation, or a
      * character's footprint. Made in world coordinates; find moves it into the scene.
      */
+    @RequiredArgsConstructor
     static final class Target
     {
         /** Shapes besides the client's object shapes (0 to 22). */
@@ -431,12 +434,6 @@ class RouteFinder
         final Actor actor;
         /** How far away it can be used from, with a line of sight; 1: only from beside it, by the rules of its kind. */
         int range = 1;
-
-        Target(int x, int y, int width, int height, int shape, int rotation, int closedSides, Actor actor)
-        {
-            this.x = x; this.y = y; this.width = width; this.height = height;
-            this.shape = shape; this.rotation = rotation; this.closedSides = closedSides; this.actor = actor;
-        }
 
         static Target tile(WorldPoint p) { return new Target(p.getX(), p.getY(), 1, 1, TILE, 0, 0, null); }
 

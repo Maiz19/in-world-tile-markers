@@ -202,9 +202,9 @@ final class PathTracker extends Overlay implements KeyListener
         if (click != null && !click.routed && guess == null) { return null; }
         if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(me.getWorldView(), guess)))
         {
-            if (object == null) { return guess; }
             predict(me, guess, object);
-            return predictedPath.main.isEmpty() ? me.getWorldLocation() : last(predictedPath.main);
+            // No path to a tile (another level): the tile clicked.
+            return !predictedPath.main.isEmpty() ? last(predictedPath.main) : object == null ? guess : me.getWorldLocation();
         }
         if (!activePath.turns.isEmpty()) { return last(activePath.turns); }
         if (approaching) { return approachEnd == null ? me.getWorldLocation() : approachEnd; }
@@ -317,7 +317,16 @@ final class PathTracker extends Overlay implements KeyListener
         LocalPoint destination = client.getLocalDestinationLocation();
         if (toDestination && activePath.turns.isEmpty() && destination != null) { start(Target.tile(WorldPoint.fromLocal(client, destination)), runOnClick()); }
         toDestination = false;
-        if (!activePath.turns.isEmpty()) { follow(now); }
+        // The server walks you with no path known here (the walk began elsewhere, as a predicted walk into the extended
+        // view): its path to the flag, so the destination tile never stands there without one. Found from the tile you
+        // are on now, so it is followed from the next tick; the game chose running, so the run setting, not Ctrl now.
+        LocalPoint walking = serverDestination();
+        WorldPoint flagged = walking == null ? null : WorldPoint.fromLocal(client, walking);
+        if (activePath.turns.isEmpty() && !approaching && flagged != null && !flagged.equals(now) && lastTile != null && !now.equals(lastTile))
+        {
+            start(Target.tile(flagged), client.getVarpValue(VarPlayerID.OPTION_RUN) == 1);
+        }
+        else if (!activePath.turns.isEmpty()) { follow(now); }
         // Arrived and the client's flag is gone: a later walk the server starts is no longer this one.
         if (approaching && activePath.turns.isEmpty() && destination == null) { approaching = false; }
         walk(activePath, now, false);
@@ -388,10 +397,11 @@ final class PathTracker extends Overlay implements KeyListener
             at = next == null ? at : next;
         }
         boolean elsewhere = !at.equals(now);
-        // You already stood at its end, or were elsewhere two ticks in a row: it is not what you walk.
-        if (steps == 0 || elsewhere && !fresh && mismatch) { activePath.clear(); return; }
+        // You already stood at its end, or were elsewhere two ticks in a row with no flag of the server's: it is not what
+        // you walk. Toward the server's flag the game walks another way than this route: found again from where you are.
+        if (steps == 0 || elsewhere && !fresh && mismatch && to == null) { activePath.clear(); return; }
         // The first time you are elsewhere after a click, the route is found again from where you are.
-        if (elsewhere && fresh) { reroute(activePath.target, now); }
+        if (elsewhere && (fresh || to != null)) { reroute(activePath.target, now); }
         else { activePath.turns.subList(0, Math.min(passed, activePath.turns.size() - 1)).clear(); }
         mismatch = elsewhere;
         // To a character: on the last stretch, found again for where it stands now.
@@ -541,7 +551,7 @@ final class PathTracker extends Overlay implements KeyListener
         DrawLocations where = active ? config.activePathDrawLocations() : config.hoverPathDrawLocations();
         if (where != DrawLocations.BOTH && where != (minimap ? DrawLocations.MINIMAP : DrawLocations.GAME_WORLD)) { return false; }
         if (active) { return shown(config.activePathDisplaySetting(), keyActive); }
-        return (!minimap || config.hoverPathMinimap()) && shown(config.hoverPathDisplaySetting(), keyHover) && (!config.drawOnlyIfNoActivePath()
+        return shown(config.hoverPathDisplaySetting(), keyHover) && (!config.drawOnlyIfNoActivePath()
             || activePath.turns.isEmpty() || config.activePathDisplaySetting() == PathDisplaySetting.NEVER);
     }
 
@@ -567,11 +577,8 @@ final class PathTracker extends Overlay implements KeyListener
     /**
      * The paths' tiles in the game world, hover path first, for the plugin's renderer. With a walk target predicted
      * beyond what the client routes (MarkerSources.predictedTarget), its path too, while no active path exists or the
-     * target lies beyond the loaded area.
+     * target lies beyond the loaded area; where the predicted click met an object or wall (object), the path goes beside it.
      */
-    List<Marker> markers(WorldPoint guess) { return markers(guess, null); }
-
-    /** As markers(guess), where the predicted click met an object or wall (object), which the path goes beside. */
     List<Marker> markers(WorldPoint guess, Target object)
     {
         List<Marker> out = new ArrayList<>();
@@ -584,8 +591,8 @@ final class PathTracker extends Overlay implements KeyListener
         // One path: the predicted one while it is shown (its end is the destination), else the active one.
         if (guess != null && (activePath.turns.isEmpty() || MarkerSources.outside(wv, guess)))
         {
-            if (config.activePathDrawMode() == DrawMode.TARGET_TILE) { out.add(active.marker(guess, true)); }
-            else { predict(me, guess, object); each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main))); }
+            predict(me, guess, object);
+            each(predictedPath, true, (tile, main) -> out.add(active.marker(tile, main)));
         }
         else { each(activePath, true, (tile, main) -> out.add(active.marker(tile, main))); }
         return out;

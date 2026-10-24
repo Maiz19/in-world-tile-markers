@@ -1,11 +1,14 @@
 package com.hdworldmarkers;
 
+import com.hdworldmarkers.HdWorldMarkersConfig.CornerSize;
 import com.hdworldmarkers.HdWorldMarkersConfig.InteractStyle;
+import com.hdworldmarkers.HdWorldMarkersConfig.NpcStyle;
 import java.awt.Color;
 import java.util.Collection;
 import java.util.List;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
 
 /**
  * An NPC, player, object or ground item in the styles picked for it, as Interact highlight and other plugins' marks
@@ -15,34 +18,23 @@ final class Highlights
 {
     private Highlights() { }
 
-    /** The styles, as bits. True tile and the south-west tiles are an NPC's or player's; an object has its footprint. */
-    static final int OUTLINE = 1, HULL = 2, CLICKBOX = 4, TILE = 8, TRUE_TILE = 16, SW_TILE = 32, SW_TRUE_TILE = 64;
-    /** The styles' names in other plugins' messages, by bit. */
-    private static final String[] NAMES = {"outline", "hull", "clickbox", "tile", "truetile", "swtile", "swtruetile"};
+    /** The styles, as bits (NpcStyle's). True tile and the south-west tiles are an NPC's or player's; an object has its footprint. */
+    static final int OUTLINE = NpcStyle.OUTLINE.bit, HULL = NpcStyle.HULL.bit, CLICKBOX = NpcStyle.CLICKBOX.bit, TILE = NpcStyle.TILE.bit,
+        TRUE_TILE = NpcStyle.TRUE_TILE.bit, SW_TILE = NpcStyle.SW_TILE.bit, SW_TRUE_TILE = NpcStyle.SW_TRUE_TILE.bit;
 
+    /** Interact highlight's styles as bits: each is the NPC style of its name. */
     static int of(Collection<InteractStyle> styles)
     {
         int bits = 0;
-        for (InteractStyle s : styles)
-        {
-            switch (s)
-            {
-                case OUTLINE: bits |= OUTLINE; break;
-                case HULL: bits |= HULL; break;
-                case CLICKBOX: bits |= CLICKBOX; break;
-                case TILE: bits |= TILE; break;
-                case TRUE_TILE: bits |= TRUE_TILE; break;
-                default: break;
-            }
-        }
+        for (InteractStyle s : styles) { bits |= NpcStyle.valueOf(s.name()).bit; }
         return bits;
     }
 
-    /** A style's bit from its name in a message; 0 for an unknown name. */
+    /** A style's bit from its name in a message (NpcStyle.saved); 0 for an unknown name. */
     static int named(String name)
     {
-        for (int i = 0; i < NAMES.length; i++) { if (NAMES[i].equalsIgnoreCase(name)) { return 1 << i; } }
-        return 0;
+        NpcStyle style = NpcStyle.bySaved(name);
+        return style == null ? 0 : style.bit;
     }
 
     /** What a thing's marks are keyed by: its kind, world view and identity there. */
@@ -106,6 +98,10 @@ final class Highlights
      * south-west tiles: one tile, of its footprint), an object's or item's footprint (any tile style, once).
      */
     static void tiles(List<Marker> out, int layer, String key, Object thing, int styles, Color color, Color fill, double width)
+    { tiles(out, layer, key, thing, styles, null, color, fill, width); }
+
+    /** As tiles; with a corner size, the south-west tiles are drawn as that corner of the tile instead (South west as corner). */
+    static void tiles(List<Marker> out, int layer, String key, Object thing, int styles, CornerSize corner, Color color, Color fill, double width)
     {
         if ((styles & (TILE | TRUE_TILE | SW_TILE | SW_TRUE_TILE)) == 0) { return; }
         if (thing instanceof TileObject || thing instanceof MouseTargets.Item)
@@ -120,12 +116,22 @@ final class Highlights
         int size = c == null ? 1 : Math.max(1, Math.min(64, c.getSize())), plane = a.getWorldView().getPlane(), offset = (size - 1) * 64;
         LocalPoint local = a.getLocalLocation();
         if ((styles & TILE) != 0 && local != null) { out.add(marker(layer, key + ":tile", local, plane, size, color, fill, width)); }
-        if ((styles & SW_TILE) != 0 && local != null) { out.add(marker(layer, key + ":sw", local.plus(-offset, -offset), plane, 1, color, fill, width)); }
+        if ((styles & SW_TILE) != 0 && local != null) { out.add(sw(layer, key + ":sw", local.plus(-offset, -offset), plane, corner, color, fill, width)); }
         // The server's tile is the south-west one of the footprint.
-        LocalPoint server = (styles & (TRUE_TILE | SW_TRUE_TILE)) != 0 ? LocalPoint.fromWorld(a.getWorldView(), a.getWorldLocation()) : null;
+        WorldPoint world = (styles & (TRUE_TILE | SW_TRUE_TILE)) != 0 ? a.getWorldLocation() : null;
+        LocalPoint server = world == null ? null : LocalPoint.fromWorld(a.getWorldView(), world);
         if (server == null) { return; }
         if ((styles & TRUE_TILE) != 0) { out.add(marker(layer, key + ":true", server.plus(offset, offset), plane, size, color, fill, width)); }
-        if ((styles & SW_TRUE_TILE) != 0) { out.add(marker(layer, key + ":swtrue", server, plane, 1, color, fill, width)); }
+        if ((styles & SW_TRUE_TILE) != 0) { out.add(sw(layer, key + ":swtrue", server, plane, corner, color, fill, width)); }
+    }
+
+    /** A south-west tile, or with a corner size that corner of it (its south-west half or quarter). */
+    private static Marker sw(int layer, String key, LocalPoint point, int plane, CornerSize corner, Color color, Color fill, double width)
+    {
+        if (corner == null) { return marker(layer, key, point, plane, 1, color, fill, width); }
+        Marker m = marker(layer, key + ":corner", point.plus(corner.offset, corner.offset), plane, 1, color, fill, width);
+        m.area = corner.area;
+        return m;
     }
 
     private static Marker marker(int layer, String key, LocalPoint point, int plane, int size, Color color, Color fill, double width)

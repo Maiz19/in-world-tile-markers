@@ -6,6 +6,7 @@ import java.awt.Font;
 import java.awt.Shape;
 import java.awt.font.FontRenderContext;
 import java.awt.font.GlyphVector;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.Path2D;
 import java.util.ArrayList;
@@ -13,6 +14,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import lombok.RequiredArgsConstructor;
 import net.runelite.client.ui.FontManager;
 
 /**
@@ -65,11 +67,10 @@ final class SceneText
      * it shows). The edge leaves out the text and the edges before it: while the camera moved, the renderer's depth
      * sort drew a shadow over the text it lay a few units behind for a moment, so they no longer overlap at all.
      */
+    @RequiredArgsConstructor
     static final class Glyph
     {
         final OutlinePaint.Mesh fill, edge;
-
-        Glyph(OutlinePaint.Mesh fill, OutlinePaint.Mesh edge) { this.fill = fill; this.edge = edge; }
     }
 
     private static final FontRenderContext CONTEXT = new FontRenderContext(null, true, true);
@@ -112,7 +113,7 @@ final class SceneText
             Area around = null;
             if (style.edge == HdWorldMarkersConfig.TextEdge.SHADOW)
             {
-                around = glyph.createTransformedArea(java.awt.geom.AffineTransform.getTranslateInstance(style.edgeWidth, style.edgeWidth));
+                around = glyph.createTransformedArea(AffineTransform.getTranslateInstance(style.edgeWidth, style.edgeWidth));
             }
             else if (style.edge == HdWorldMarkersConfig.TextEdge.OUTLINE)
             {

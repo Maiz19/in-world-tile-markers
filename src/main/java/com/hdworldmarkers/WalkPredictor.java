@@ -2,6 +2,7 @@ package com.hdworldmarkers;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.GameObject;
 import net.runelite.api.Model;
 import net.runelite.api.Renderable;
@@ -20,19 +21,11 @@ import net.runelite.api.coords.WorldPoint;
 final class WalkPredictor
 {
     /** What the ray met: its tile, and the object or wall there as a route target (null where it met the ground). */
+    @RequiredArgsConstructor
     static final class Hit
     {
         final WorldPoint tile;
         final RouteFinder.Target object;
-
-        Hit(WorldPoint tile, RouteFinder.Target object) { this.tile = tile; this.object = object; }
-    }
-
-    /** The world tile where the ray through canvas point (mx, my) meets an object or the terrain, or null. */
-    static WorldPoint raycast(ModelShapes.Camera camera, float mx, float my, WorldView wv, int plane)
-    {
-        Hit hit = hit(camera, mx, my, wv, plane);
-        return hit == null ? null : hit.tile;
     }
 
     /** Ray depth samples the ground is checked at, at most this far apart along the ray. */

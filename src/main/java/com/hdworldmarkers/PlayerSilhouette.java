@@ -50,8 +50,7 @@ final class PlayerSilhouette
             n = model.getVerticesCount();
             faces = model.getFaceCount();
             if (n <= 0 || faces <= 0) { return false; }
-            if (x.length < n) { x = new float[n * 2]; y = new float[n * 2]; z = new float[n * 2]; px = new float[n * 2]; py = new float[n * 2]; pd = new float[n * 2]; }
-            if (a.length < faces) { a = new int[faces * 2]; b = new int[faces * 2]; c = new int[faces * 2]; skip = new boolean[faces * 2]; hidden = new boolean[faces * 2]; }
+            room(n, faces);
             System.arraycopy(model.getVerticesX(), 0, x, 0, n);
             System.arraycopy(model.getVerticesY(), 0, y, 0, n);
             System.arraycopy(model.getVerticesZ(), 0, z, 0, n);
@@ -72,13 +71,19 @@ final class PlayerSilhouette
             return true;
         }
 
+        /** Room for n points and this many faces. */
+        private void room(int n, int faces)
+        {
+            if (x.length < n) { x = new float[n * 2]; y = new float[n * 2]; z = new float[n * 2]; px = new float[n * 2]; py = new float[n * 2]; pd = new float[n * 2]; }
+            if (a.length < faces) { a = new int[faces * 2]; b = new int[faces * 2]; c = new int[faces * 2]; skip = new boolean[faces * 2]; hidden = new boolean[faces * 2]; }
+        }
+
         /** Takes faces given as model points (x, height as y, z) in place, as the ground around an actor; false for none. */
         boolean take(float[] mx, float[] my, float[] mz, int n, int[] fa, int[] fb, int[] fc, int faces)
         {
             this.n = n; this.faces = faces;
             if (n <= 0 || faces <= 0) { return false; }
-            if (x.length < n) { x = new float[n * 2]; y = new float[n * 2]; z = new float[n * 2]; px = new float[n * 2]; py = new float[n * 2]; pd = new float[n * 2]; }
-            if (a.length < faces) { a = new int[faces * 2]; b = new int[faces * 2]; c = new int[faces * 2]; skip = new boolean[faces * 2]; hidden = new boolean[faces * 2]; }
+            room(n, faces);
             System.arraycopy(mx, 0, x, 0, n); System.arraycopy(my, 0, y, 0, n); System.arraycopy(mz, 0, z, 0, n);
             System.arraycopy(fa, 0, a, 0, faces); System.arraycopy(fb, 0, b, 0, faces); System.arraycopy(fc, 0, c, 0, faces);
             Arrays.fill(skip, 0, faces, false);
@@ -237,22 +242,22 @@ final class PlayerSilhouette
     private static void cover(Shape s, ModelShapes.Camera cam, int w, int h, float ox, float oy, float scale, CellVisit visit)
     {
         float[] poly = new float[12], view = new float[9];
+        int[] v = new int[3];
         for (int f = 0; f < s.faces; f++)
         {
             if (s.hidden[f]) { continue; }
             int i = s.a[f], j = s.b[f], k = s.c[f];
             if (Float.isNaN(s.px[i] + s.px[j] + s.px[k]) || !(s.pd[i] > 0 && s.pd[j] > 0 && s.pd[k] > 0)) { continue; }
+            v[0] = i; v[1] = j; v[2] = k;
             int n;
             if (s.pd[i] >= NEAR && s.pd[j] >= NEAR && s.pd[k] >= NEAR)
             {
                 n = 3;
-                int[] v = {i, j, k};
                 for (int q = 0; q < 3; q++) { poly[q * 3] = s.px[v[q]]; poly[q * 3 + 1] = s.py[v[q]]; poly[q * 3 + 2] = 1 / s.pd[v[q]]; }
             }
             else
             {
                 // In view space (x right, y down, depth), where edges stay straight, the part at depth >= NEAR.
-                int[] v = {i, j, k};
                 for (int q = 0; q < 3; q++)
                 {
                     float d = s.pd[v[q]];

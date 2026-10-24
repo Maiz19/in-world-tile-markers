@@ -36,12 +36,16 @@ package com.hdworldmarkers;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.reflect.TypeToken;
 import com.hdworldmarkers.HdWorldMarkersConfig.CornerSize;
 import com.hdworldmarkers.HdWorldMarkersConfig.NpcStyle;
 import java.awt.Color;
+import java.awt.Shape;
 import java.util.*;
+import java.util.function.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.coords.*;
 import net.runelite.client.config.ConfigManager;
@@ -51,10 +55,21 @@ import net.runelite.client.util.WildcardMatcher;
 
 /** Collects what to draw: the tiles, objects and NPCs you mark, and the tile indicators. */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class MarkerSources
 {
     /** Upper bound of the draw distance option; the loaded area limits it further in practice. */
     static final int MAX_DISTANCE = 200;
+
+    /** npcsInFront, worked out once per tick (collect) and when NPCs come or go, rather than per frame; null: again. */
+    private List<NPC> frontNpcs;
+    private final Saved<TilePoint> savedTiles = new Saved<>(TILES, TilePoint.class, TilePoint::valid, p -> p.regionId);
+    private final Saved<LinePoint> savedLines = new Saved<>(LINES, LinePoint.class, LinePoint::valid, p -> p.regionId);
+    private Player combatPlayer;
+    private long combatAt;
+    private boolean combat;
+    /** What collect() found for the NPCs, which modelTargets() right after it uses again; null when it is to be found again. */
+    private NpcPass pass;
 
     /** The draw distance in local units. */
     static int drawDistance(HdWorldMarkersConfig config) { return Math.max(8, Math.min(MAX_DISTANCE, config.distance())) * 128; }
@@ -68,7 +83,7 @@ final class MarkerSources
     private final AgilitySource agility;
     private final Set<NPC> npcs = Collections.newSetFromMap(new IdentityHashMap<>());
     /** The marked tiles in the scene; drawn in the tile options of the moment (collect). */
-    private final List<Ground> ground = new ArrayList<>();
+    private final List<Placed<TilePoint>> ground = new ArrayList<>();
     /**
      * The marked tiles as markers, kept while the tiles and their options stay the same (Tile Packs alone can have
      * thousands, each made anew every tick); null when they are to be made again.
@@ -76,7 +91,7 @@ final class MarkerSources
     private List<Marker> groundMarkers;
     private List<Object> groundOptions;
     /** Your lines in the scene, and as markers (each keeps its own colour and width), made once per rebuild. */
-    private final List<LineMark> lineMarks = new ArrayList<>();
+    private final List<Placed<LinePoint>> lineMarks = new ArrayList<>();
     private List<Marker> lineMarkers;
     /** Outlines of tagged NPCs and marked objects in other world views (a boat): only RuneLite's 2D outline draws them. */
     private List<ModelTarget> outlinesElsewhere = Collections.emptyList();
@@ -101,14 +116,6 @@ final class MarkerSources
     private int predictedTick;
     private boolean predictionConfirmed;
     private WorldView predictedWorld;
-
-    @Inject
-    MarkerSources(Client client, ConfigManager configs, Gson gson, HdWorldMarkersConfig config, ObjectMarkerSource objectMarkers,
-        TilePackSource tilePacks, AgilitySource agility)
-    {
-        this.client = client; this.configs = configs; this.gson = gson; this.config = config; this.objectMarkers = objectMarkers;
-        this.tilePacks = tilePacks; this.agility = agility;
-    }
 
     void rebuild()
     {
@@ -157,6 +164,12 @@ final class MarkerSources
      */
     List<NPC> npcsInFront()
     {
+        if (frontNpcs == null) { frontNpcs = nearestInFront(); }
+        return frontNpcs;
+    }
+
+    private List<NPC> nearestInFront()
+    {
         if (inFront.isEmpty() && npcs.isEmpty()) { return Collections.emptyList(); }
         Player player = client.getLocalPlayer();
         LocalPoint at = player == null ? null : player.getLocalLocation();
@@ -189,7 +202,7 @@ final class MarkerSources
         try
         {
             Map<String, NpcTag> tags = gson.fromJson(configs.getConfiguration(HdWorldMarkersConfig.GROUP, NPC_TAGS),
-                new com.google.gson.reflect.TypeToken<Map<String, NpcTag>>() { }.getType());
+                new TypeToken<Map<String, NpcTag>>() { }.getType());
             if (tags != null) { tags.values().removeIf(Objects::isNull); return tags; }
         }
         catch (RuntimeException ignored)
@@ -234,9 +247,6 @@ final class MarkerSources
         return bits;
     }
 
-    private static final int HULL = NpcStyle.HULL.bit, TILE = NpcStyle.TILE.bit, TRUE_TILE = NpcStyle.TRUE_TILE.bit,
-        SW_TILE = NpcStyle.SW_TILE.bit, SW_TRUE_TILE = NpcStyle.SW_TRUE_TILE.bit, OUTLINE = NpcStyle.OUTLINE.bit, CLICKBOX = NpcStyle.CLICKBOX.bit;
-
     /** A tagged NPC name's own color (Tag color); null for the styles' colors. */
     static final class NpcTag
     {
@@ -269,6 +279,7 @@ final class MarkerSources
         readNpcHighlights();
         npcs.clear();
         inFront.clear();
+        frontNpcs = null;
         refreshNpcs(client.getTopLevelWorldView());
     }
 
@@ -328,42 +339,69 @@ final class MarkerSources
     /** Config key prefix of a region's marked tiles. */
     static final String TILES = "tiles_";
 
-    /** Saved tiles per region, parsed once per saved text: every scene load read them again. */
-    private final Map<Integer, String> tileJson = new HashMap<>();
-    private final Map<Integer, List<TilePoint>> tilePoints = new HashMap<>();
+    /** Config key prefix of a region's lines. */
+    static final String LINES = "lines_";
 
-    /**
-     * A region's marked tiles as saved (Ground Markers' format, so its export can be imported); invalid ones are
-     * left out. The list is shared: changes go through a copy.
-     */
-    List<TilePoint> tiles(int region)
+    /** Saved points of one kind per region (tiles_, lines_), parsed once per saved text: every scene load read them again. */
+    private final class Saved<T>
     {
-        String json = configs.getConfiguration(HdWorldMarkersConfig.GROUP, TILES + region);
-        if (json == null || json.isEmpty()) { return Collections.emptyList(); }
-        if (json.equals(tileJson.get(region))) { return tilePoints.get(region); }
-        List<TilePoint> points = parse(gson, json);
-        points.removeIf(p -> p.regionId != region);
-        tileJson.put(region, json);
-        tilePoints.put(region, Collections.unmodifiableList(points));
-        return tilePoints.get(region);
+        final String prefix;
+        final Class<T> type;
+        final Predicate<T> valid;
+        final ToIntFunction<T> region;
+        private final Map<Integer, String> json = new HashMap<>();
+        private final Map<Integer, List<T>> points = new HashMap<>();
+
+        Saved(String prefix, Class<T> type, Predicate<T> valid, ToIntFunction<T> region)
+        {
+            this.prefix = prefix; this.type = type; this.valid = valid; this.region = region;
+        }
+
+        /** A region's points as saved, invalid ones and those of other regions left out; the list is shared: changes go through a copy. */
+        List<T> get(int r)
+        {
+            String text = configs.getConfiguration(HdWorldMarkersConfig.GROUP, prefix + r);
+            if (text == null || text.isEmpty()) { return Collections.emptyList(); }
+            if (text.equals(json.get(r))) { return points.get(r); }
+            List<T> parsed = parse(gson, text, type, valid);
+            parsed.removeIf(p -> region.applyAsInt(p) != r);
+            json.put(r, text);
+            points.put(r, Collections.unmodifiableList(parsed));
+            return points.get(r);
+        }
     }
 
+    /** A region's marked tiles as saved (Ground Markers' format, so its export can be imported). */
+    List<TilePoint> tiles(int region) { return savedTiles.get(region); }
+
+    /** A region's lines as saved. */
+    List<LinePoint> lines(int region) { return savedLines.get(region); }
+
     /** Tiles in Ground Markers' format (its export, or what is saved here); invalid ones are left out, all when it is no list. */
-    static List<TilePoint> parse(Gson gson, String json)
+    static List<TilePoint> parse(Gson gson, String json) { return parse(gson, json, TilePoint.class, TilePoint::valid); }
+
+    /** A saved list of points; invalid ones are left out, all when it is no list. */
+    static <T> List<T> parse(Gson gson, String json, Class<T> type, Predicate<T> valid)
     {
-        List<TilePoint> points = new ArrayList<>();
+        List<T> points = new ArrayList<>();
         if (json == null || json.isEmpty()) { return points; }
         try
         {
             // Not JsonParser: its parse is deprecated in later Gson, and RuneLite's (2.8.5) has no parseString.
             for (JsonElement element : gson.fromJson(json, JsonArray.class))
             {
-                TilePoint p = gson.fromJson(element, TilePoint.class);
-                if (p != null && p.valid()) { points.add(p); }
+                T p = gson.fromJson(element, type);
+                if (p != null && valid.test(p)) { points.add(p); }
             }
         }
         catch (RuntimeException ex) { points.clear(); }
         return points;
+    }
+
+    /** Whether a saved point lies in its region's 64 x 64 tiles, on one of the four planes. */
+    static boolean inRegion(int regionId, int regionX, int regionY, int z)
+    {
+        return regionId >= 0 && regionId <= 0xFFFF && regionX >= 0 && regionX <= 63 && regionY >= 0 && regionY <= 63 && z >= 0 && z <= 3;
     }
 
     private void loadGround(WorldView wv, int region)
@@ -376,44 +414,9 @@ final class MarkerSources
             for (WorldPoint instance : WorldPoint.toLocalInstance(wv, world))
             {
                 LocalPoint local = LocalPoint.fromWorld(wv, instance.getX(), instance.getY());
-                if (local != null) { lineMarks.add(new LineMark("line:" + wv.getId() + ":" + instance + ":" + p.edge, local, instance.getPlane(), p)); }
+                if (local != null) { lineMarks.add(new Placed<>("line:" + wv.getId() + ":" + instance + ":" + p.edge, local, instance.getPlane(), p)); }
             }
         }
-    }
-
-    /** Config key prefix of a region's lines. */
-    static final String LINES = "lines_";
-    private final Map<Integer, String> lineJson = new HashMap<>();
-    private final Map<Integer, List<LinePoint>> linePoints = new HashMap<>();
-
-    /** A region's lines as saved, invalid ones left out; the list is shared: changes go through a copy. */
-    List<LinePoint> lines(int region)
-    {
-        String json = configs.getConfiguration(HdWorldMarkersConfig.GROUP, LINES + region);
-        if (json == null || json.isEmpty()) { return Collections.emptyList(); }
-        if (json.equals(lineJson.get(region))) { return linePoints.get(region); }
-        List<LinePoint> points = parseLines(gson, json);
-        points.removeIf(p -> p.regionId != region);
-        lineJson.put(region, json);
-        linePoints.put(region, Collections.unmodifiableList(points));
-        return linePoints.get(region);
-    }
-
-    /** Lines as saved here; invalid ones are left out, all when it is no list. */
-    static List<LinePoint> parseLines(Gson gson, String json)
-    {
-        List<LinePoint> points = new ArrayList<>();
-        if (json == null || json.isEmpty()) { return points; }
-        try
-        {
-            for (JsonElement element : gson.fromJson(json, JsonArray.class))
-            {
-                LinePoint p = gson.fromJson(element, LinePoint.class);
-                if (p != null && p.valid()) { points.add(p); }
-            }
-        }
-        catch (RuntimeException ex) { points.clear(); }
-        return points;
     }
 
     /** Whether any line is saved for the loaded area (for the double drawing warning). */
@@ -424,10 +427,10 @@ final class MarkerSources
     {
         if (lineMarkers != null) { return lineMarkers; }
         List<Marker> markers = new ArrayList<>(lineMarks.size());
-        for (LineMark l : lineMarks)
+        for (Placed<LinePoint> l : lineMarks)
         {
-            Marker m = layer(Marker.LINE, new Marker(l.key, l.point, l.plane, 1, 1, l.line.color, null, l.line.width, null));
-            m.edge = l.line.edge.ordinal();
+            Marker m = layer(Marker.LINE, new Marker(l.key, l.point, l.plane, 1, 1, l.of.color, null, l.of.width, null));
+            m.edge = l.of.edge.ordinal();
             markers.add(m);
         }
         return lineMarkers = markers;
@@ -444,7 +447,7 @@ final class MarkerSources
                 // and changing floors within a scene does not necessarily trigger a rebuild.
                 LocalPoint local = LocalPoint.fromWorld(wv, instance.getX(), instance.getY());
                 if (local == null) { continue; }
-                ground.add(new Ground(prefix + wv.getId() + ":" + instance, local, instance.getPlane(), p, prefix.equals("pack:")));
+                ground.add(new Placed<>(prefix + wv.getId() + ":" + instance, local, instance.getPlane(), p));
             }
         }
     }
@@ -452,6 +455,8 @@ final class MarkerSources
     List<Marker> collect(List<Marker> pathTiles)
     {
         visible = null;
+        frontNpcs = null;
+        pass = null;
         List<Marker> result = new ArrayList<>(groundMarkers());
         Player player = client.getLocalPlayer();
         if (player == null) { return new ArrayList<>(); }
@@ -484,40 +489,17 @@ final class MarkerSources
             }
         }
         // Tagged NPCs' tile styles, as NPC Indicators draws them, and your Slayer task's.
-        Set<NPC> task = taskTargets();
-        NpcLook look = npcs.isEmpty() && task.isEmpty() ? null : new NpcLook();
-        for (NPC npc : withTask(task))
+        pass = new NpcPass(now);
+        Set<NPC> task = pass.task;
+        NpcLook look = pass.look;
+        for (NPC npc : pass.npcs)
         {
             if (!look.drawn(npc)) { continue; }
             NPCComposition composition = npc.getTransformedComposition();
             if (composition == null || composition.getSize() < 1 || composition.getSize() > 64) { continue; }
-            NpcTag tag = tag(npc);
-            int styles = look.styles(npc, task);
-            Color own = look.own(tag, npc, task);
-            // Your task's NPCs without a Tag color take the Slayer task fill and width in every style.
-            boolean onTask = look.onTask(tag, npc, task);
-            double width = onTask ? look.taskWidth : look.width;
-            int size = composition.getSize(), npcPlane = npc.getWorldView().getPlane(), offset = (size - 1) * 64;
             String key = "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex();
-            LocalPoint local = npc.getLocalLocation();
-            // The true tile only when a style needs it: where the server has the NPC (its south-west tile).
-            WorldPoint server = (styles & (TRUE_TILE | SW_TRUE_TILE)) != 0 ? npc.getWorldLocation() : null;
-            LocalPoint trueSw = server == null ? null : LocalPoint.fromWorld(npc.getWorldView(), server);
-            if ((styles & TILE) != 0 && local != null)
-            { result.add(npcMarker(Marker.NPC_TILE, key + ":tile", local, npcPlane, size, or(own, look.tile), onTask ? look.taskFill : look.tileFill, width)); }
-            if ((styles & TRUE_TILE) != 0 && trueSw != null)
-            {
-                result.add(npcMarker(Marker.NPC_TILE + 1, key + ":true", trueSw.plus(offset, offset), npcPlane, size, or(own, look.trueTile),
-                    onTask ? look.taskFill : look.trueTileFill, width));
-            }
-            if ((styles & SW_TILE) != 0 && local != null)
-            {
-                result.add(swMarker(Marker.NPC_TILE + 2, key + ":sw", local.plus(-offset, -offset), npcPlane, own, look.swTile, look.swTileFill, onTask, look));
-            }
-            if ((styles & SW_TRUE_TILE) != 0 && trueSw != null)
-            {
-                result.add(swMarker(Marker.NPC_TILE + 3, key + ":swtrue", trueSw, npcPlane, own, look.swTrueTile, look.swTrueTileFill, onTask, look));
-            }
+            // Each tile style on its own layer, in its own colors.
+            look.add(result, null, null, Marker.NPC_TILE, key, npc, TILE_STYLES, task);
         }
         // Marked objects' tile style: the stroke is capped at 2, as in Object Markers.
         for (ObjectMarkerSource.Resolved o : visibleObjects())
@@ -584,11 +566,11 @@ final class MarkerSources
         if (groundMarkers != null && options.equals(groundOptions)) { return groundMarkers; }
         Color fill = new Color(0, 0, 0, opacity);
         List<Marker> markers = new ArrayList<>(ground.size());
-        for (Ground g : ground)
+        for (Placed<TilePoint> g : ground)
         {
             // Tile Packs' tiles always keep their pack's colors; marked tiles theirs while Remember tile colors is on.
-            Color color = g.tile.color == null || !remember && !g.pack ? tileColor : g.tile.color;
-            markers.add(layer(Marker.GROUND, new Marker(g.key, g.point, g.plane, 1, 1, color, fill, width, g.tile.label)));
+            Color color = g.of.color == null || !remember && !g.key.startsWith("pack:") ? tileColor : g.of.color;
+            markers.add(layer(Marker.GROUND, new Marker(g.key, g.point, g.plane, 1, 1, color, fill, width, g.of.label)));
         }
         groundOptions = options;
         return groundMarkers = markers;
@@ -635,7 +617,7 @@ final class MarkerSources
     void hitsplat(Actor target, long now)
     {
         Player player = client.getLocalPlayer();
-        if (player != null && target != null && (target == player || target == player.getInteracting())) { lastHit = now; }
+        if (player != null && target != null && (target == player || target == player.getInteracting())) { lastHit = now; combatPlayer = null; }
     }
 
     /** Whether Interact highlight is hidden now: in combat, with Hide in combat on. */
@@ -646,6 +628,13 @@ final class MarkerSources
      * interacting with each other. Current state only, nothing is predicted.
      */
     boolean inCombat(Player player, long now)
+    {
+        // Asked up to four times a tick (the fadeouts, Hide in combat): the NPCs are scanned once per moment.
+        if (player != combatPlayer || now != combatAt) { combatPlayer = player; combatAt = now; combat = fight(player, now); }
+        return combat;
+    }
+
+    private boolean fight(Player player, long now)
     {
         if (lastHit != 0 && now - lastHit < COMBAT_MS) { return true; }
         if (attackable(player.getInteracting())) { return true; }
@@ -662,9 +651,15 @@ final class MarkerSources
     {
         if (actor instanceof Player) { return true; }
         if (!(actor instanceof NPC) || ((NPC) actor).isDead()) { return false; }
-        NPCComposition c = ((NPC) actor).getTransformedComposition();
-        if (c == null || c.getActions() == null) { return false; }
-        for (String action : c.getActions()) { if ("Attack".equals(action)) { return true; } }
+        return hasAttack(((NPC) actor).getTransformedComposition());
+    }
+
+    /** Whether an NPC has an Attack option. */
+    static boolean hasAttack(NPCComposition c)
+    {
+        String[] options = c == null ? null : c.getActions();
+        if (options == null) { return false; }
+        for (String option : options) { if (option != null && "Attack".equals(Text.removeTags(option))) { return true; } }
         return false;
     }
 
@@ -761,20 +756,9 @@ final class MarkerSources
             : corners(config.hoveredTileCornersOnly(), config.hoveredTileCornerSize(), layer(Marker.HOVER, m));
     }
 
-    private static Marker npcMarker(int layer, String key, LocalPoint point, int plane, int size, Color color, Color fill, double width)
-    { return layer(layer, new Marker(key, point, plane, size, size, color, fill, width, null)); }
-
-    /** A south-west tile style: the tile, or with South west as corner its south-west half in the corner's own colors; on your task the task's fill and width. */
-    private static Marker swMarker(int layer, String key, LocalPoint point, int plane, Color own, Color color, Color fill, boolean onTask, NpcLook look)
-    {
-        double width = onTask ? look.taskWidth : look.width;
-        if (!look.swCorner) { return npcMarker(layer, key, point, plane, 1, or(own, color), onTask ? look.taskFill : fill, width); }
-        CornerSize size = look.cornerSize;
-        Marker m = npcMarker(layer, key + ":corner", point.plus(size.offset, size.offset), plane, 1, or(own, look.corner),
-            onTask ? look.taskFill : look.cornerFill, width);
-        m.area = size.area;
-        return m;
-    }
+    /** The NPC styles drawn as markers, in their layer order from Marker.NPC_TILE, and those drawn as models. */
+    private static final NpcStyle[] TILE_STYLES = {NpcStyle.TILE, NpcStyle.TRUE_TILE, NpcStyle.SW_TILE, NpcStyle.SW_TRUE_TILE},
+        MODEL_STYLES = {NpcStyle.OUTLINE, NpcStyle.HULL, NpcStyle.CLICKBOX};
 
     /** The tag of this NPC's name, or null. */
     private NpcTag tag(NPC npc) { return npcTags.isEmpty() || npc.getName() == null ? null : npcTags.get(Text.standardize(npc.getName())); }
@@ -782,21 +766,65 @@ final class MarkerSources
     /** A style's color, or the name's own (Tag color) when it has one. */
     private static Color or(Color own, Color style) { return own != null ? own : style; }
 
+    /** The tagged and Slayer task NPCs of a tick and their options, found once for collect() and modelTargets(). */
+    private final class NpcPass
+    {
+        final long now;
+        final Set<NPC> task = taskTargets();
+        final Collection<NPC> npcs = withTask(task);
+        final NpcLook look = npcs.isEmpty() ? null : new NpcLook();
+
+        NpcPass(long now) { this.now = now; }
+    }
+
     /** The NPC options of the moment, read once per collect or modelTargets rather than per NPC and style. */
     private final class NpcLook
     {
         final double width = config.npcBorderWidth();
-        final boolean swCorner = config.npcSouthWestCorner();
-        final Color corner = config.npcCornerColor(), cornerFill = config.npcCornerFill();
-        final CornerSize cornerSize = config.npcCornerSize() == null ? CornerSize.HALF : config.npcCornerSize();
+        /** South west as corner: the south-west tiles as that corner of the tile, in the corner's own colors; else null. */
+        final CornerSize corner = !config.npcSouthWestCorner() ? null : config.npcCornerSize() == null ? CornerSize.HALF : config.npcCornerSize();
         final int taskStyles = bits(config.npcSlayerTaskStyles());
         final Color task = config.npcSlayerTaskColor(), taskFill = config.npcSlayerTaskFill();
         final double taskWidth = config.npcSlayerTaskBorderWidth();
         final boolean ignoreDead = config.npcIgnoreDead(), ignorePets = config.npcIgnorePets();
-        final Color tile = config.npcTileColor(), tileFill = config.npcTileFill(), trueTile = config.npcTrueTileColor(),
-            trueTileFill = config.npcTrueTileFill(), swTile = config.npcSouthWestTileColor(), swTileFill = config.npcSouthWestTileFill(),
-            swTrueTile = config.npcSouthWestTrueTileColor(), swTrueTileFill = config.npcSouthWestTrueTileFill(), outline = config.npcOutlineColor(),
-            hull = config.npcHullColor(), hullFill = config.npcHullFill(), clickbox = config.npcClickboxColor(), clickboxFill = config.npcClickboxFill();
+        /** Per style (by ordinal) its border and fill color; an outline has no fill. */
+        final Color[] colors = new Color[NpcStyle.values().length], fills = new Color[colors.length];
+
+        NpcLook()
+        {
+            set(NpcStyle.HULL, config.npcHullColor(), config.npcHullFill());
+            set(NpcStyle.TILE, config.npcTileColor(), config.npcTileFill());
+            set(NpcStyle.TRUE_TILE, config.npcTrueTileColor(), config.npcTrueTileFill());
+            boolean c = corner != null;
+            set(NpcStyle.SW_TILE, c ? config.npcCornerColor() : config.npcSouthWestTileColor(), c ? config.npcCornerFill() : config.npcSouthWestTileFill());
+            set(NpcStyle.SW_TRUE_TILE, c ? config.npcCornerColor() : config.npcSouthWestTrueTileColor(), c ? config.npcCornerFill() : config.npcSouthWestTrueTileFill());
+            set(NpcStyle.OUTLINE, config.npcOutlineColor(), Marker.NO_FILL);
+            set(NpcStyle.CLICKBOX, config.npcClickboxColor(), config.npcClickboxFill());
+        }
+
+        private void set(NpcStyle style, Color color, Color fill) { colors[style.ordinal()] = color; fills[style.ordinal()] = fill; }
+
+        /**
+         * The styles of an NPC it has: as markers (tiles, each on its own layer from this one) or models (outline, hull,
+         * clickbox), in the style's colors, or its name's Tag color; your task's NPCs without one in the Slayer task fill and width.
+         */
+        void add(List<Marker> markers, List<ModelTarget> models, List<ModelTarget> elsewhere, int layer, String key, NPC npc, NpcStyle[] styles, Set<NPC> targets)
+        {
+            int has = styles(npc, targets);
+            if (has == 0) { return; }
+            NpcTag tag = tag(npc);
+            boolean onTask = onTask(tag, npc, targets);
+            Color own = own(tag, npc, targets);
+            double w = onTask ? taskWidth : width;
+            for (int i = 0; i < styles.length; i++)
+            {
+                NpcStyle style = styles[i];
+                if ((has & style.bit) == 0) { continue; }
+                Color color = or(own, colors[style.ordinal()]), fill = onTask ? taskFill : fills[style.ordinal()];
+                if (markers != null) { Highlights.tiles(markers, layer + i, key, npc, style.bit, corner, color, fill, w); }
+                else { Highlights.models(models, elsewhere, client.getTopLevelWorldView(), client, key, npc, style.bit, color, fill, w); }
+            }
+        }
 
         /** An NPC's styles: those of its name's lists, and the Slayer task styles for one of your task. */
         int styles(NPC npc, Set<NPC> targets) { return MarkerSources.this.styles(npc.getName()) | (targets.contains(npc) ? taskStyles : 0); }
@@ -823,31 +851,17 @@ final class MarkerSources
         WorldView top = client.getTopLevelWorldView();
         if (player == null || top == null) { return new ArrayList<>(); }
         List<ModelTarget> result = new ArrayList<>(), elsewhere = new ArrayList<>();
-        Set<NPC> task = taskTargets();
-        NpcLook look = npcs.isEmpty() && task.isEmpty() ? null : new NpcLook();
-        for (NPC npc : withTask(task))
+        // The tick's NPCs, task and options as collect() just found them; worked out here when it did not run first.
+        NpcPass tick = pass != null ? pass : new NpcPass(System.currentTimeMillis());
+        pass = null;
+        Set<NPC> task = tick.task;
+        NpcLook look = tick.look;
+        for (NPC npc : tick.npcs)
         {
             if (!look.drawn(npc)) { continue; }
-            NpcTag tag = tag(npc);
-            int styles = look.styles(npc, task);
-            Color own = look.own(tag, npc, task);
-            if (npc.getWorldView() != top)
-            {
-                // In another world view only the outline, which RuneLite's outline renderer draws in 2D.
-                if ((styles & OUTLINE) != 0)
-                {
-                    elsewhere.add(ModelTarget.npcOutline("npc:" + npc.getWorldView().getId() + ":" + npc.getIndex() + ":outline", npc,
-                        or(own, look.outline), look.onTask(tag, npc, task) ? look.taskWidth : look.width));
-                }
-                continue;
-            }
-            boolean onTask = look.onTask(tag, npc, task);
-            double width = onTask ? look.taskWidth : look.width;
-            String key = "npc:" + npc.getIndex();
-            if ((styles & OUTLINE) != 0) { result.add(ModelTarget.npcOutline(key + ":outline", npc, or(own, look.outline), width)); }
-            if ((styles & HULL) != 0) { result.add(ModelTarget.npc(key + ":hull", npc, or(own, look.hull), onTask ? look.taskFill : look.hullFill, width)); }
-            if ((styles & CLICKBOX) != 0)
-            { result.add(ModelTarget.npcClickbox(key + ":clickbox", npc, or(own, look.clickbox), onTask ? look.taskFill : look.clickboxFill, width, client)); }
+            // In another world view only the outline, which RuneLite's outline renderer draws in 2D (Highlights.models).
+            String key = npc.getWorldView() == top ? "npc:" + npc.getIndex() : "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex() + ":outline";
+            look.add(null, result, elsewhere, 0, key, npc, MODEL_STYLES, task);
         }
         for (ObjectMarkerSource.Resolved o : visibleObjects())
         {
@@ -878,7 +892,7 @@ final class MarkerSources
         agility.models(result);
         LocalPoint origin = player.getLocalLocation();
         int distance = drawDistance(config);
-        // Each target's distance once: an object's location() is a new LocalPoint per call.
+        // Each target's distance once.
         Map<ModelTarget, Integer> distances = new IdentityHashMap<>();
         for (ModelTarget t : result)
         {
@@ -888,7 +902,7 @@ final class MarkerSources
         result.removeIf(t -> { Integer d = distances.get(t); return d == null || d > distance; });
         result.sort(Comparator.comparingInt(distances::get));
         // What the mouse is on and what you interact with first, at any distance.
-        if (interact != null && !interactHidden(player, System.currentTimeMillis()))
+        if (interact != null && !interactHidden(player, tick.now))
         {
             List<ModelTarget> interacting = new ArrayList<>(), interactingElsewhere = new ArrayList<>();
             interact.targets(interacting, interactingElsewhere);
@@ -941,7 +955,7 @@ final class MarkerSources
     }
 
     private static void part(List<ModelTarget> out, String key, String n, TileObject object, Renderable r, int dx, int dy,
-        java.util.function.Supplier<java.awt.Shape> hull, Color border, Color fill, double width, boolean outline)
+        Supplier<Shape> hull, Color border, Color fill, double width, boolean outline)
     {
         if (r == null) { return; }
         out.add(outline ? ModelTarget.objectOutline(key + ":outline" + n, object, r, dx, dy, border, width)
@@ -983,11 +997,12 @@ final class MarkerSources
     void item(Tile tile, TileItem item, boolean spawned) { if (tile != null && item != null) { agility.item(tile, item, spawned); } }
     void add(NPC npc)
     {
+        frontNpcs = null;
         npcs.remove(npc); inFront.remove(npc);
         if (isHighlighted(npc)) { npcs.add(npc); }
         if (inFront(npc.getName())) { inFront.add(npc); }
     }
-    void remove(NPC npc) { npcs.remove(npc); inFront.remove(npc); }
+    void remove(NPC npc) { npcs.remove(npc); inFront.remove(npc); frontNpcs = null; }
     /** A world view that loaded inside the scene (a boat): its markers, without rebuilding the rest. */
     void addWorldView(WorldView wv) { removeWorldView(wv); visit(wv); visible = null; groundMarkers = null; lineMarkers = null; }
 
@@ -998,45 +1013,31 @@ final class MarkerSources
         agility.removeWorldView(wv);
         npcs.removeIf(n -> n.getWorldView() == wv);
         inFront.removeIf(n -> n.getWorldView() == wv);
+        frontNpcs = null;
         ground.removeIf(m -> m.point.getWorldView() == wv.getId());
         groundMarkers = null;
         lineMarks.removeIf(l -> l.point.getWorldView() == wv.getId());
         lineMarkers = null;
         visible = null;
     }
-    void clear() { visible = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
+    void clear() { visible = null; frontNpcs = null; pass = null; combatPlayer = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
         lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0;
         ground.clear(); groundMarkers = null; lineMarks.clear(); lineMarkers = null; npcs.clear(); objectMarkers.clear(); agility.clear(); styleNames.clear();
         nameStyles.clear(); npcTags = Collections.emptyMap(); outlinesElsewhere = Collections.emptyList();
         inFront.clear(); inFrontByName.clear(); inFrontNames = Collections.emptyList(); }
 
-    /** A marked tile in the scene, or a Tile Packs pack's (pack). */
-    private static final class Ground
+    /** A saved mark placed in the scene: a marked tile (a Tile Packs pack's: key pack:) or one of your lines. */
+    @RequiredArgsConstructor
+    private static final class Placed<T>
     {
         final String key;
         final LocalPoint point;
         final int plane;
-        final TilePoint tile;
-        final boolean pack;
-
-        Ground(String key, LocalPoint point, int plane, TilePoint tile, boolean pack)
-        {
-            this.key = key; this.point = point; this.plane = plane; this.tile = tile; this.pack = pack;
-        }
-    }
-
-    /** One of your lines in the scene. */
-    private static final class LineMark
-    {
-        final String key;
-        final LocalPoint point;
-        final int plane;
-        final LinePoint line;
-
-        LineMark(String key, LocalPoint point, int plane, LinePoint line) { this.key = key; this.point = point; this.plane = plane; this.line = line; }
+        final T of;
     }
 
     /** A line as saved: its tile as Ground Markers' point format, the side it runs along, and its own colour and width. */
+    @RequiredArgsConstructor
     static final class LinePoint
     {
         final int regionId, regionX, regionY, z;
@@ -1044,15 +1045,9 @@ final class MarkerSources
         final Color color;
         final double width;
 
-        LinePoint(int regionId, int regionX, int regionY, int z, HdWorldMarkersConfig.Edge edge, Color color, double width)
-        {
-            this.regionId = regionId; this.regionX = regionX; this.regionY = regionY; this.z = z; this.edge = edge; this.color = color; this.width = width;
-        }
-
         boolean valid()
         {
-            return regionId >= 0 && regionId <= 0xFFFF && regionX >= 0 && regionX <= 63 && regionY >= 0 && regionY <= 63 && z >= 0 && z <= 3
-                && edge != null && color != null && width >= 0 && width <= 10;
+            return inRegion(regionId, regionX, regionY, z) && edge != null && color != null && width >= 0 && width <= 10;
         }
 
         /** The same line: on the same side of the same tile. */
@@ -1063,21 +1058,14 @@ final class MarkerSources
     }
 
     /** A marked tile as saved: Ground Markers' point format. */
+    @RequiredArgsConstructor
     static final class TilePoint
     {
         final int regionId, regionX, regionY, z;
         final Color color;
         final String label;
 
-        TilePoint(int regionId, int regionX, int regionY, int z, Color color, String label)
-        {
-            this.regionId = regionId; this.regionX = regionX; this.regionY = regionY; this.z = z; this.color = color; this.label = label;
-        }
-
-        boolean valid()
-        {
-            return regionId >= 0 && regionId <= 0xFFFF && regionX >= 0 && regionX <= 63 && regionY >= 0 && regionY <= 63 && z >= 0 && z <= 3;
-        }
+        boolean valid() { return inRegion(regionId, regionX, regionY, z); }
 
         boolean same(TilePoint o) { return regionId == o.regionId && regionX == o.regionX && regionY == o.regionY && z == o.z; }
     }

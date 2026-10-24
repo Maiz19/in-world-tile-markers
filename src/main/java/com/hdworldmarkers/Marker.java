@@ -1,6 +1,7 @@
 package com.hdworldmarkers;
 
 import java.awt.Color;
+import net.runelite.api.Actor;
 import net.runelite.api.coords.LocalPoint;
 
 /** A rectangular tile footprint centered on point, or a shape standing around it (offX). */
@@ -54,7 +55,7 @@ final class Marker
      * is as the frame is drawn, as hulls and outlines do. Its point is where it was at the last client tick, and text
      * that moved only then shook against a walking character's head.
      */
-    net.runelite.api.Actor follow;
+    Actor follow;
 
     /** Where it stands now: its character's place, else its point. */
     LocalPoint at()

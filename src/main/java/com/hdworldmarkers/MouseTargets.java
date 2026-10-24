@@ -1,16 +1,16 @@
 package com.hdworldmarkers;
 
-import static net.runelite.api.MenuAction.*;
-
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.Point;
 import net.runelite.api.coords.LocalPoint;
+import static net.runelite.api.MenuAction.*;
 
 /**
  * What is under the mouse, for the highlights that change there. Agility's darker obstacles count every option the
@@ -19,6 +19,7 @@ import net.runelite.api.coords.LocalPoint;
  * id or one of the forms it takes. Each obstacle's clickbox was once tested against the mouse every tick.
  */
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 final class MouseTargets
 {
     static final Set<MenuAction> OBJECT_OPTIONS = EnumSet.of(GAME_OBJECT_FIRST_OPTION, GAME_OBJECT_SECOND_OPTION,
@@ -30,19 +31,16 @@ final class MouseTargets
     private final Client client;
 
     /** A ground item that shows: the pile it lies in and its model there (one of the top three of the pile). */
+    @RequiredArgsConstructor
     static final class Item
     {
         final ItemLayer layer;
         final TileItem model;
 
-        Item(ItemLayer layer, TileItem model) { this.layer = layer; this.model = model; }
-
         @Override public boolean equals(Object o) { return o instanceof Item && ((Item) o).layer == layer && ((Item) o).model == model; }
 
         @Override public int hashCode() { return System.identityHashCode(layer) * 31 + System.identityHashCode(model); }
     }
-
-    @Inject MouseTargets(Client client) { this.client = client; }
 
     /** The client's menu options of the moment; none without a menu. */
     private MenuEntry[] entries()
@@ -99,13 +97,19 @@ final class MouseTargets
         return NPC_OPTIONS.contains(type) ? e.getNpc() : null;
     }
 
-    /** In an open menu, the option the mouse is on (a 19 pixel title, then 15 pixels per option, the last one at the top); null on none. */
+    /**
+     * The client's menu layout: the "Choose Option" title, then one row per option. RuneLite's Menu API gives the menu's
+     * place and size but not the row the mouse is on, so it is worked out from these.
+     */
+    private static final int MENU_TITLE = 19, MENU_ROW = 15;
+
+    /** In an open menu, the option the mouse is on (the last one at the top); null on none. */
     static MenuEntry row(Client client, MenuEntry[] entries)
     {
         Menu menu = client.getMenu();
         Point mouse = client.getMouseCanvasPosition();
         if (menu == null || mouse == null) { return null; }
-        int dy = mouse.getY() - menu.getMenuY() - 19, i = dy < 0 ? -1 : entries.length - 1 - dy / 15;
+        int dy = mouse.getY() - menu.getMenuY() - MENU_TITLE, i = dy < 0 ? -1 : entries.length - 1 - dy / MENU_ROW;
         return i >= 0 && i < entries.length && mouse.getX() >= menu.getMenuX() && mouse.getX() < menu.getMenuX() + menu.getMenuWidth() ? entries[i] : null;
     }
 
@@ -139,14 +143,21 @@ final class MouseTargets
     private Tile tile(MenuEntry e)
     {
         WorldView wv = client.getWorldView(e.getWorldViewId());
-        Scene scene = wv == null ? null : wv.getScene();
-        if (scene == null) { return null; }
-        // Options give scene coordinates; the extended tiles start further out in the top-level view.
-        int offset = wv.getId() == WorldView.TOPLEVEL ? (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2 : 0;
-        Tile[][][] tiles = scene.getExtendedTiles();
-        int x = e.getParam0() + offset, y = e.getParam1() + offset, plane = wv.getPlane();
-        if (tiles == null || plane < 0 || plane >= tiles.length || x < 0 || y < 0 || x >= tiles[plane].length || y >= tiles[plane][x].length) { return null; }
-        return tiles[plane][x][y];
+        return wv == null ? null : tile(wv, e.getParam0(), e.getParam1(), wv.getPlane());
+    }
+
+    /**
+     * A scene tile (scene x and y, as options give them), also in the extended tiles around the loaded area, which
+     * start as much further out as they are larger than the scene; null outside them.
+     */
+    static Tile tile(WorldView wv, int sceneX, int sceneY, int plane)
+    {
+        Scene scene = wv.getScene();
+        Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
+        if (tiles == null) { tiles = scene == null ? null : scene.getTiles(); }
+        if (tiles == null || plane < 0 || plane >= tiles.length) { return null; }
+        int offset = (tiles[plane].length - wv.getSizeX()) / 2, x = sceneX + offset, y = sceneY + offset;
+        return x < 0 || y < 0 || x >= tiles[plane].length || y >= tiles[plane][x].length ? null : tiles[plane][x][y];
     }
 
     /** Whether a menu's object id is this object's, or one of the forms it takes (a multiloc), or the form it takes now. */

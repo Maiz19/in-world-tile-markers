@@ -563,7 +563,7 @@ final class FloatClickbox
                 else if (pd >= 0) { float t = pd / (pd - qd); next[m++] = px + (qx - px) * t; next[m++] = py + (qy - py) * t; }
                 px = qx; py = qy; pd = qd;
             }
-            cur = java.util.Arrays.copyOf(next, m);
+            cur = Arrays.copyOf(next, m);
             n = m / 2;
         }
         return n >= 3 ? cur : null;
