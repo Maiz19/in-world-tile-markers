@@ -26,6 +26,7 @@ import net.runelite.api.widgets.Widget;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.input.*;
 import net.runelite.client.ui.overlay.*;
+import net.runelite.client.util.Text;
 
 /**
  * The walking paths, with Path Marker's options: the active path, where your last click makes you walk, and the hover
@@ -96,15 +97,16 @@ final class PathTracker extends Overlay implements KeyListener
     /** The last click found its own route, which the active path is. */
     private boolean clickRouted;
 
-    /** A clicked option: its kind, its parameters (scene x and y), its id and its character. */
+    /** A clicked option: its kind, its parameters (scene x and y), its id, its character and its text. */
     private static final class Click
     {
         final MenuAction type;
         final int x, y, id;
         final Actor actor;
+        final String option;
         /** Routed already, at the click. */
         boolean routed;
-        Click(MenuEntry e) { type = e.getType(); x = e.getParam0(); y = e.getParam1(); id = e.getIdentifier(); actor = e.getActor(); }
+        Click(MenuEntry e) { type = e.getType(); x = e.getParam0(); y = e.getParam1(); id = e.getIdentifier(); actor = e.getActor(); option = e.getOption(); }
     }
     private Point mouseAt;
     /**
@@ -251,7 +253,7 @@ final class PathTracker extends Overlay implements KeyListener
     /** Routes a click: its route becomes the active path, or the active path follows where the client walks. */
     private void route(Click c, Tile hovered)
     {
-        clickRouted = start(target(c.type, c.x, c.y, c.id, c.actor, clickInMenu ? clickTile : hovered, null), clickRunning);
+        clickRouted = start(target(c.type, c.x, c.y, c.id, c.actor, c.option, clickInMenu ? clickTile : hovered, null), clickRunning);
         toDestination = !clickRouted && !NOT_WALKING.contains(c.type) && !NOT_LEFT_CLICK.contains(c.type);
         watching = OBJECT_OPTIONS.contains(c.type) ? 60 : 0;
         c.routed = true;
@@ -300,7 +302,7 @@ final class PathTracker extends Overlay implements KeyListener
         // The hover path keeps its target while the mouse is on no tile.
         MenuEntry option = entries.length == 0 ? null : chosen(entries);
         Target t = minimap != null ? Target.tile(minimap) : hovered == null || option == null ? hoverPath.target
-            : target(option.getType(), option.getParam0(), option.getParam1(), option.getIdentifier(), option.getActor(), hovered, hoverPath.target);
+            : target(option.getType(), option.getParam0(), option.getParam1(), option.getIdentifier(), option.getActor(), option.getOption(), hovered, hoverPath.target);
         if (minimap != null && pressed) { clickRouted = start(t, runOnClick()); clickFlag = null; }
         pressed = false;
         mouseAt = client.getMouseCanvasPosition();
@@ -340,7 +342,7 @@ final class PathTracker extends Overlay implements KeyListener
         // Shown nowhere (by default): no route search every time the mouse moves; found again once it is shown.
         if (!shows(false, false) && !shows(false, true)) { hoverPath.clear(); return; }
         // Toward a target used from a distance, where the walk stops depends on running too.
-        if (t == null ? hoverPath.target != null : !t.same(hoverPath.target) || !from.equals(hoverPath.from) || t.range > 1 && runOnClick() != hoverPath.running)
+        if (t == null ? hoverPath.target != null : !t.same(hoverPath.target) || !from.equals(hoverPath.from) || t.fromAfar() && runOnClick() != hoverPath.running)
         {
             List<WorldPoint> turns = t == null ? null : routes.approach(from, t, routes.find(from, t), runOnClick());
             hoverPath.turns = turns == null ? Collections.emptyList() : turns;
@@ -368,7 +370,7 @@ final class PathTracker extends Overlay implements KeyListener
         activePath.target = t;
         activePath.turns = turns;
         activePath.running = running;
-        approaching = t.range > 1;
+        approaching = t.fromAfar();
         approachEnd = turns.isEmpty() ? null : last(turns);
         fresh = true;
         mismatch = false;
@@ -382,7 +384,7 @@ final class PathTracker extends Overlay implements KeyListener
     {
         // The server walks you elsewhere than this route ends: to its flag then. Its flag lies beyond where a walk to a
         // target used from a distance stops.
-        LocalPoint destination = activePath.target.range > 1 ? null : serverDestination();
+        LocalPoint destination = activePath.target.fromAfar() ? null : serverDestination();
         WorldPoint to = destination == null ? null : WorldPoint.fromLocal(client, destination);
         if (to != null && !to.equals(last(activePath.turns))) { reroute(Target.tile(to), now); }
         // Arrived, or moved more than two tiles (teleported, or another level).
@@ -405,7 +407,10 @@ final class PathTracker extends Overlay implements KeyListener
         else { activePath.turns.subList(0, Math.min(passed, activePath.turns.size() - 1)).clear(); }
         mismatch = elsewhere;
         // To a character: on the last stretch, found again for where it stands now.
-        if (activePath.target.actor != null && activePath.turns.size() < 2) { reroute(Target.of(activePath.target.actor), now); }
+        if (activePath.target.actor != null && activePath.turns.size() < 2)
+        {
+            reroute(Target.of(activePath.target.actor).reaching(activePath.target), now);
+        }
     }
 
     /** The client's destination once the server sets it; null while it is the client's own flag of the last click. */
@@ -474,7 +479,7 @@ final class PathTracker extends Overlay implements KeyListener
      * Where a menu option walks: to an object, a ground item's tile, a character, or (Walk here, and options not named
      * here) the given tile. Null for options that never walk; keep when the target is not found.
      */
-    private Target target(MenuAction type, int x, int y, int id, Actor actor, Tile tile, Target keep)
+    private Target target(MenuAction type, int x, int y, int id, Actor actor, String option, Tile tile, Target keep)
     {
         switch (type)
         {
@@ -486,16 +491,51 @@ final class PathTracker extends Overlay implements KeyListener
             case GROUND_ITEM_FIFTH_OPTION: case WIDGET_TARGET_ON_GROUND_ITEM:
                 Tile on = sceneTile(x, y);
                 List<TileItem> items = on == null ? null : on.getGroundItems();
-                return items != null && items.stream().anyMatch(i -> i != null && i.getId() == id) ? Target.tile(on.getWorldLocation()) : keep;
+                if (items == null || items.stream().noneMatch(i -> i != null && i.getId() == id)) { return keep; }
+                Target item = Target.tile(on.getWorldLocation());
+                // A spell (Telekinetic Grab) takes it from a distance.
+                if ("Cast".equals(option == null ? "" : Text.removeTags(option))) { item.range = SPELL_RANGE; }
+                return item;
             case NPC_FIRST_OPTION: case NPC_SECOND_OPTION: case NPC_THIRD_OPTION: case NPC_FOURTH_OPTION: case NPC_FIFTH_OPTION:
             case WIDGET_TARGET_ON_NPC: case PLAYER_FIRST_OPTION: case PLAYER_SECOND_OPTION: case PLAYER_THIRD_OPTION:
             case PLAYER_FOURTH_OPTION: case PLAYER_FIFTH_OPTION: case PLAYER_SIXTH_OPTION: case PLAYER_SEVENTH_OPTION:
             case WIDGET_TARGET_ON_PLAYER:
-                return actor == null ? keep : Target.of(actor);
+                if (actor == null) { return keep; }
+                Target t = Target.of(actor);
+                reach(t, option);
+                return t;
             default:
                 return NOT_LEFT_CLICK.contains(type) || NOT_WALKING.contains(type) ? null
                     : tile == null ? keep : Target.tile(tile.getWorldLocation());
         }
+    }
+
+    /** Tiles a spell reaches, cast or autocast, and the most any attack reaches. */
+    private static final int SPELL_RANGE = 10;
+    /** The weapon param holding its attack range; 0 for weapons used from beside the target. */
+    private static final int ATTACK_RANGE = 13;
+
+    /**
+     * How far an option on a character reaches: a spell cast on it, or an attack while autocasting, SPELL_RANGE; an
+     * attack as far as the weapon worn reaches (a halberd 2, a salamander 1 by sight, so diagonally too, a ranged
+     * weapon or powered staff further, on longrange 2 more); else as far as the character is used from.
+     */
+    private void reach(Target t, String option)
+    {
+        String o = option == null ? "" : Text.removeTags(option);
+        int mode = client.getVarpValue(VarPlayerID.COM_MODE);
+        // Style 4 is autocasting (5 its defensive form, kept in another varbit).
+        if ("Cast".equals(o) || "Attack".equals(o) && mode == 4) { t.range = SPELL_RANGE; return; }
+        if (!"Attack".equals(o)) { return; }
+        ItemContainer worn = client.getItemContainer(net.runelite.api.gameval.InventoryID.WORN);
+        Item weapon = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+        int id = weapon == null ? -1 : weapon.getId();
+        // The cache gives the Dawnbringer 10; it reaches 7.
+        int range = id < 0 ? 0 : id == net.runelite.api.gameval.ItemID.VERZIK_SPECIAL_WEAPON ? 7
+            : client.getItemDefinition(id).getIntValue(ATTACK_RANGE);
+        if (range == 1) { t.bySight = true; }
+        // Every weapon reaching further than a halberd has its longrange (on powered staves named Defensive) as style 3.
+        else if (range > 1) { t.range = Math.min(SPELL_RANGE, mode == 3 && range > 2 ? range + 2 : range); }
     }
 
     /** The object with this id on a scene tile, as a target, or null. */

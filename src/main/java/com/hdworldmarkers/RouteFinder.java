@@ -252,12 +252,13 @@ class RouteFinder
     /**
      * For a target used from a distance (Target.range): the turns cut where the walk along them stops, at the end of
      * the first game tick (a step walking, two running) that leaves you within range with a line of sight to it; none
-     * when you already are. Other targets' turns as they are.
+     * when you already are, also where no route to it is found. Other targets' turns as they are.
      */
     List<WorldPoint> approach(WorldPoint from, Target t, List<WorldPoint> turns, boolean running)
     {
-        if (turns == null || t == null || t.range <= 1) { return turns; }
+        if (t == null || !t.fromAfar()) { return turns; }
         if (inRange(from, t)) { return new ArrayList<>(); }
+        if (turns == null) { return null; }
         List<WorldPoint> out = new ArrayList<>();
         WorldPoint at = from;
         int steps = 0;
@@ -434,6 +435,19 @@ class RouteFinder
         final Actor actor;
         /** How far away it can be used from, with a line of sight; 1: only from beside it, by the rules of its kind. */
         int range = 1;
+        /** Used by a line of sight at range 1 too, so also from diagonally beside it (a salamander). */
+        boolean bySight;
+
+        /** Whether it is used from a distance, by a line of sight. */
+        boolean fromAfar() { return range > 1 || bySight; }
+
+        /** This target, reaching as far as another. */
+        Target reaching(Target other)
+        {
+            range = other.range;
+            bySight = other.bySight;
+            return this;
+        }
 
         static Target tile(WorldPoint p) { return new Target(p.getX(), p.getY(), 1, 1, TILE, 0, 0, null); }
 
@@ -464,14 +478,13 @@ class RouteFinder
 
         Target shifted(int dx, int dy)
         {
-            Target t = new Target(x + dx, y + dy, width, height, shape, rotation, closedSides, actor);
-            t.range = range;
-            return t;
+            return new Target(x + dx, y + dy, width, height, shape, rotation, closedSides, actor).reaching(this);
         }
 
         boolean same(Target o)
         {
-            return o != null && x == o.x && y == o.y && width == o.width && height == o.height && shape == o.shape && rotation == o.rotation;
+            return o != null && x == o.x && y == o.y && width == o.width && height == o.height && shape == o.shape && rotation == o.rotation
+                && range == o.range && bySight == o.bySight;
         }
 
         /** Whether the target can be used from tile (x, y), which has these collision flags, by the client's rules for its kind. */

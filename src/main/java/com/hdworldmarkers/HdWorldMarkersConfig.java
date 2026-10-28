@@ -89,10 +89,10 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "distance", name = "Draw distance", description = "Maximum distance in tiles for saved markers. Your own tile, destination and paths are always drawn", position = 1, section = generalSection)
     default int distance() { return 200; }
 
-    @ConfigItem(keyName = "tilesThroughWalls", name = "Through walls", description = "Draw tiles and labels in front of walls, objects and characters, like 2D overlays, and in the same colour from every angle. Hulls, outlines, clickboxes and timer pies sit in the world: what stands in front of them hides them, you too", position = 3, section = generalSection)
+    @ConfigItem(keyName = "tilesThroughWalls", name = "Through walls", description = "Draw marks in front of walls, objects and characters, like 2D overlays, and in the same colour from every angle", position = 3, section = generalSection)
     default boolean tilesThroughWalls() { return true; }
 
-    @ConfigItem(keyName = "charactersInFrontOfTiles", name = "Player in front of marks", description = "With Through walls on, keep your own character in front of the marks", position = 4, section = generalSection)
+    @ConfigItem(keyName = "charactersInFrontOfTiles", name = "Player in front of marks", description = "With Through walls on, keep your own character in front of tiles, and in front of hulls, outlines, clickboxes and timer pies where you stand before them", position = 4, section = generalSection)
     default boolean charactersInFrontOfTiles() { return true; }
 
     @ConfigItem(keyName = "warnDoubleDrawing", name = "Double drawing warning", description = "A chat message when another plugin draws the same marks (Ground Markers, Tile Packs, Agility's highlights, ...), so they show twice, with what to turn off", position = 5, section = generalSection)

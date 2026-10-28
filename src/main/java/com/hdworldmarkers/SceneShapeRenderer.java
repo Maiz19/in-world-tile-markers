@@ -215,9 +215,10 @@ final class SceneShapeRenderer
     private static final int CUT_ROOM = 600;
     /** Scratch for a shape's cut as it is drawn, which sizes the objects (see cutCosts). */
     private final ScreenOutline sizer = new ScreenOutline();
-    /** The sizer's pass, as Bucket.cutPass: 1 the border (fills whole), 2 the fill (borders whole). */
-    private int sizerPass;
-    { sizer.whole = f -> sizerPass == 1 ? f >= outline.borderFaces : f < outline.borderFaces; }
+    /** The sizer's pass, as Bucket.cutPass: 1 the border (fills whole), 2 the fill (borders whole); the bit of the actor cut out. */
+    private int sizerPass, sizerBit;
+    { sizer.whole = f -> (sizerPass == 1 ? f >= outline.borderFaces : f < outline.borderFaces)
+        || (this.shapeFront[outline.a[f]] & this.shapeFront[outline.b[f]] & this.shapeFront[outline.c[f]] & sizerBit) != 0; }
     /** Per outline face of the shape being appended, what the player's cut makes of it (sizer.before); null for no cut. */
     private int[] shapeCut;
     private LocalPoint xrayAnchor;
@@ -280,17 +281,17 @@ final class SceneShapeRenderer
     static final int LABEL_SHADOW_LAYER = 21, LABEL_LAYER = 22;
 
     /**
-     * Whether the actors (the player, the NPCs put In front) are cut out of a layer: tiles only (tile markers, NPC and
-     * object tiles, paths, lines, the current and destination tile). Hulls, outlines, clickboxes and pies stay whole, as
-     * labels do: through walls they are drawn as they are, over the actors too, as the player asked (2026-10-23).
+     * Whether a layer holds tiles (tile markers, NPC and object tiles, paths, lines, the current and destination tile):
+     * the actors (the player, the NPCs put In front) are cut out of them wherever they stand (2026-10-23).
      */
-    static boolean cutsAround(int layer) { return layer < CLICKBOX_LAYER || layer == Marker.DESTINATION || layer == Marker.CURRENT; }
+    static boolean tileLayer(int layer) { return layer < CLICKBOX_LAYER || layer == Marker.DESTINATION || layer == Marker.CURRENT; }
 
     /**
-     * Whether a layer is drawn through walls (with Through walls on): tiles and labels. Hulls, outlines, clickboxes and
-     * pies sit in the world at their own depth, hidden by what stands in front of them, the player too (2026-10-23).
+     * Whether the actors are cut out of a layer: all but labels, which lie over them as RuneLite's text does. Hulls,
+     * outlines, clickboxes and pies only where they lie behind the actor (see front): through walls, but in front of or
+     * behind the character as in the world, as the player asked (2026-10-27).
      */
-    static boolean throughWalls(int layer) { return cutsAround(layer) || layer >= LABEL_SHADOW_LAYER; }
+    static boolean cutsAround(int layer) { return layer < LABEL_SHADOW_LAYER; }
     /** Appended to a marker's key for its label. */
     static final String LABEL_KEY = "\u0000label";
     /** Without through walls a label stands this much nearer than its tile, so the character on the tile is not in front of it. */
@@ -845,10 +846,10 @@ final class SceneShapeRenderer
      */
     private boolean draw(String key, LocalPoint anchor, int level, Color border, Color fill, boolean hasBorder)
     {
-        // Through walls applies to tiles and labels (throughWalls): they sit at the same place in front of the camera,
-        // so lighting renderers (117 HD: shadows, fog, lights) shade them all alike. Hulls, outlines, clickboxes and
-        // pies stay in the world.
-        boolean xray = this.xray && throughWalls(layer);
+        // Through walls applies to every shape, tiles as well as hulls, clickboxes, outlines and pies: all of them then
+        // sit at the same place in front of the camera, so lighting renderers (117 HD: shadows, fog, lights) shade them
+        // all alike.
+        boolean xray = this.xray;
         // World points of the shape: on the ground for through walls (moved to the camera at draw time),
         // else just above it towards the camera. Later layers slightly nearer, so shapes never z-fight.
         place(xray, false);
@@ -886,7 +887,8 @@ final class SceneShapeRenderer
         st.xray = xray;
         st.shared = shared;
         st.begin(layer, key);
-        // Only tiles are cut around the actors (cutsAround; see Bucket's cutter).
+        // Labels stay whole over the actors, and faces of model marks in front of them (cutsAround, front; see Bucket's cutter).
+        front();
         shapeCut = xray && cutsAround(layer) ? cutCosts(key) : null;
         append(st, layer, borderHsl, borderAlpha, fillHsl, fillAlpha);
         if (white)
@@ -944,6 +946,7 @@ final class SceneShapeRenderer
         for (int i = 0; i < outline.vertices; i++)
         {
             b.layer[first + i] = vertexLayer;
+            b.front[first + i] = shapeFront[i];
             b.wx[first + i] = tx[i]; b.wy[first + i] = ty[i]; b.wz[first + i] = tz[i];
             b.ox[first + i] = billboarding ? outline.x[i] - billboard[3] : Float.NaN;
             b.oy[first + i] = outline.y[i] - billboard[4];
@@ -995,9 +998,11 @@ final class SceneShapeRenderer
     private int[] measureCutCosts()
     {
         boolean loaded = false;
-        for (PlayerSilhouette s : cuts)
+        for (int k = 0; k < cuts.size(); k++)
         {
-            // As the cutter: the border by the whole silhouette, the fill by the seen one.
+            PlayerSilhouette s = cuts.get(k);
+            // As the cutter: the border by the whole silhouette, the fill by the seen one; faces in front of the actor whole.
+            sizerBit = 1 << k;
             for (sizerPass = 1; sizerPass <= 2; sizerPass++)
             {
                 PlayerCut around = sizerPass == 1 ? s.estimate(camera) : s.estimateVisible(camera);
@@ -1269,6 +1274,7 @@ final class SceneShapeRenderer
             int shift = b.vertices - firstVertex;
             System.arraycopy(st.wx, firstVertex, b.wx, b.vertices, nv); System.arraycopy(st.wy, firstVertex, b.wy, b.vertices, nv);
             System.arraycopy(st.wz, firstVertex, b.wz, b.vertices, nv); System.arraycopy(st.layer, firstVertex, b.layer, b.vertices, nv);
+            System.arraycopy(st.front, firstVertex, b.front, b.vertices, nv);
             System.arraycopy(st.ox, firstVertex, b.ox, b.vertices, nv); System.arraycopy(st.oy, firstVertex, b.oy, b.vertices, nv);
             System.arraycopy(st.ax, firstVertex, b.ax, b.vertices, nv); System.arraycopy(st.ay, firstVertex, b.ay, b.vertices, nv);
             System.arraycopy(st.az, firstVertex, b.az, b.vertices, nv);
@@ -1287,7 +1293,7 @@ final class SceneShapeRenderer
     private static int copy(Stage st, int v, Bucket b)
     {
         int i = b.vertices++;
-        b.wx[i] = st.wx[v]; b.wy[i] = st.wy[v]; b.wz[i] = st.wz[v]; b.layer[i] = st.layer[v];
+        b.wx[i] = st.wx[v]; b.wy[i] = st.wy[v]; b.wz[i] = st.wz[v]; b.layer[i] = st.layer[v]; b.front[i] = st.front[v];
         b.ox[i] = st.ox[v]; b.oy[i] = st.oy[v]; b.ax[i] = st.ax[v]; b.ay[i] = st.ay[v]; b.az[i] = st.az[v];
         return i;
     }
@@ -1450,6 +1456,33 @@ final class SceneShapeRenderer
         // An NPC no longer In front, or gone: its silhouette and arrays with it.
         npcShapes.keySet().retainAll(kept);
         cuts = taken;
+        for (int k = 0; k < cuts.size(); k++) { cutNearest[k] = cuts.get(k).nearest(camera); }
+    }
+
+    /** Per actor cut out this frame, how near the frame's camera it comes (PlayerSilhouette.nearest). */
+    private final float[] cutNearest = new float[MAX_CUTS];
+    /** Per vertex of the shape being drawn, bit k set when it lies in front of the k-th actor cut out (see front). */
+    private int[] shapeFront = new int[64];
+
+    /**
+     * Marks the vertices of a model mark (a hull, outline, clickbox or pie) that lie in front of each actor cut out: more
+     * than PlayerSilhouette.CLEARANCE nearer the camera than any part of it. A face with all three in front stays whole
+     * when that actor is cut out of it: the actor stands behind the mark, as behind a chest whose hull is marked (the
+     * hull hangs at the chest's nearest point), so the mark covers it; standing before the chest, the actor covers the
+     * mark. Decided with the one camera the mark and the actor are both projected with, so an NPC's own hull, at its
+     * nearest point exactly, is cut around it in every frame. Tiles are cut around the actors wherever they are.
+     */
+    private void front()
+    {
+        if (shapeFront.length < outline.vertices) { shapeFront = new int[outline.vertices * 2]; }
+        boolean tile = tileLayer(layer);
+        for (int i = 0; i < outline.vertices; i++)
+        {
+            int bits = 0;
+            float d = outline.depth[i] + PlayerSilhouette.CLEARANCE;
+            for (int k = 0; !tile && k < cuts.size(); k++) { if (d < cutNearest[k]) { bits |= 1 << k; } }
+            shapeFront[i] = bits;
+        }
     }
 
     /**
@@ -1548,6 +1581,8 @@ final class SceneShapeRenderer
     {
         final int tileX, tileY, level, worldView;
         float[] wx = new float[64], wy = new float[64], wz = new float[64], layer = new float[64];
+        /** Per vertex, bit k set when it lies in front of the k-th actor cut out (see front): such faces stay whole. */
+        int[] front = new int[64];
         /** Per vertex of a label, its place in canvas pixels from where its point {ax, ay, az} projects; ox NaN for others. */
         float[] ox = new float[64], oy = new float[64], ax = new float[64], ay = new float[64], az = new float[64];
         int[] fa = new int[96], fb = new int[96], fc = new int[96], color = new int[96], alpha = new int[96];
@@ -1566,6 +1601,7 @@ final class SceneShapeRenderer
                 int n = vertexCount * 2;
                 wx = Arrays.copyOf(wx, n); wy = Arrays.copyOf(wy, n); wz = Arrays.copyOf(wz, n);
                 layer = Arrays.copyOf(layer, n);
+                front = Arrays.copyOf(front, n);
                 ox = Arrays.copyOf(ox, n); oy = Arrays.copyOf(oy, n); ax = Arrays.copyOf(ax, n); ay = Arrays.copyOf(ay, n); az = Arrays.copyOf(az, n);
             }
             if (fa.length < faceCount)
@@ -1657,6 +1693,7 @@ final class SceneShapeRenderer
         private Model frozenModel;
         private float[] fx = new float[0], fy = fx, fz = fx;
         private float[] fl = new float[0];
+        private int[] ffront = new int[0];
         private float[] fox = fl, foy = fl, fax = fl, fay = fl, faz = fl;
         /** It holds a label, whose vertices follow the camera the client draws with (billboards). */
         private boolean labels;
@@ -1668,10 +1705,14 @@ final class SceneShapeRenderer
         private List<PlayerSilhouette> frozenCuts = Collections.emptyList();
         /** Scratch for cut: the geometry as seen from a camera, cut around the player; points on the canvas, layers. */
         private final ScreenOutline cutter = new ScreenOutline();
-        /** The pass of the cut: 1 the border around the whole actor (fills stay whole), 2 the fill around what is seen (borders stay whole). */
-        private int cutPass;
-        // Only tiles are cut around the actors (cutsAround); the rest lies over them, as RuneLite's text does.
-        { cutter.whole = f -> !cutsAround((int) fl[ffa[f]]) || (cutPass == 1 ? !fBorder[f] : fBorder[f]); }
+        /**
+         * The pass of the cut: 1 the border around the whole actor (fills stay whole), 2 the fill around what is seen
+         * (borders stay whole); the actor (its index in frozenCuts) whose silhouette is being cut out.
+         */
+        private int cutPass, cutting;
+        // Labels are not cut around the actors (cutsAround), as RuneLite's text lies over them; nor is a face in front of the actor.
+        { cutter.whole = f -> !cutsAround((int) fl[ffa[f]]) || (cutPass == 1 ? !fBorder[f] : fBorder[f])
+            || (ffront[ffa[f]] & ffront[ffb[f]] & ffront[ffc[f]] & (1 << cutting)) != 0; }
         private float[] sx = new float[0], sy = sx, sd = sx, sl = sx;
         /** The camera of the last pull in getModel; null after freeze (a new frame), so the next call pulls. */
         private ModelShapes.Camera pulled;
@@ -1689,9 +1730,9 @@ final class SceneShapeRenderer
 
         synchronized void freeze(int anchorX, int anchorY, int anchorZ, List<PlayerSilhouette> cuts)
         {
-            if (fx.length < vertices) { fx = new float[wx.length]; fy = new float[wx.length]; fz = new float[wx.length]; fl = new float[wx.length]; }
+            if (fx.length < vertices) { fx = new float[wx.length]; fy = new float[wx.length]; fz = new float[wx.length]; fl = new float[wx.length]; ffront = new int[wx.length]; }
             System.arraycopy(wx, 0, fx, 0, vertices); System.arraycopy(wy, 0, fy, 0, vertices);
-            System.arraycopy(wz, 0, fz, 0, vertices); System.arraycopy(layer, 0, fl, 0, vertices);
+            System.arraycopy(wz, 0, fz, 0, vertices); System.arraycopy(layer, 0, fl, 0, vertices); System.arraycopy(front, 0, ffront, 0, vertices);
             if (fox.length < vertices) { fox = new float[wx.length]; foy = new float[wx.length]; fax = new float[wx.length]; fay = new float[wx.length]; faz = new float[wx.length]; }
             System.arraycopy(ox, 0, fox, 0, vertices); System.arraycopy(oy, 0, foy, 0, vertices);
             System.arraycopy(ax, 0, fax, 0, vertices); System.arraycopy(ay, 0, fay, 0, vertices); System.arraycopy(az, 0, faz, 0, vertices);
@@ -1729,10 +1770,12 @@ final class SceneShapeRenderer
             }
             ScreenOutline o = cutter;
             o.load(sx, sy, sd, n, ffa, ffb, ffc, frozenFaces);
-            for (PlayerSilhouette s : frozenCuts)
+            for (int k = 0; k < frozenCuts.size(); k++)
             {
                 // The border around the whole actor, hidden parts too; the fill only around what is seen of it.
+                PlayerSilhouette s = frozenCuts.get(k);
                 PlayerCut whole = s.cut(cam), seen = s.visibleCut(cam);
+                cutting = k;
                 cutPass = 1;
                 if (whole != null) { o.cutOut(whole, m.getVerticesCount(), m.getFaceCount()); }
                 cutPass = 2;

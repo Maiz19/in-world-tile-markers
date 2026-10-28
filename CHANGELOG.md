@@ -7,7 +7,8 @@
 - **Paths**: the active path no longer disappears while the destination tile still shows. Predicted walks in extended chunks avoid water and fences.
 - **Hover path**: *Show on minimap* is gone. *Display* and *Draw location(s)* now decide where it shows.
 - **Outlines** no longer flicker. Hulls and outlines sit right on docks and decks.
-- Through walls and Player in front of marks now work as the game draws things.
+- Through walls and Player in front of marks now work as the game draws things. Object marks show through walls too; you hide one only when you stand in front of it.
+- Attack paths stop where your weapon reaches: halberds 2 tiles, salamanders diagonally too, ranged weapons and powered staves their own range (2 more on longrange, up to 10), spells 10. Telekinetic Grab no longer walks to the item.
 - Right-click options start with **HD**.
 - More highlight options for plugin developers.
 - Faster, less code.

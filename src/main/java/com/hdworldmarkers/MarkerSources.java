@@ -591,11 +591,16 @@ final class MarkerSources
         WorldPoint prediction = predictedTarget(player, now);
         WorldPoint walk = paths == null ? null : paths.destination(player, prediction, predictedObject());
         if (walk == null && local != null) { walk = WorldPoint.fromLocal(wv, local.getX(), local.getY(), plane); }
+        if (walk != null && walk.equals(player.getWorldLocation()))
+        {
+            // A walk to the tile you stand on is not shown. A walk that arrived there keeps its destination (already
+            // remembered) and fades out as usual: no blink at arrival, and a click that walks nowhere (a spell cast
+            // from where you stand) does not show it again.
+            if (!walk.equals(lastDestination)) { return null; }
+            walk = null;
+        }
         if (walk != null)
         {
-            // A walk to the tile you stand on is not shown. A walk that just arrived there keeps its
-            // destination (already remembered), so it does not blink before the fadeout.
-            if (walk.equals(player.getWorldLocation()) && !walk.equals(lastDestination)) { return null; }
             target = lastDestination = walk;
             arrivedAt = 0;
         }
