@@ -186,22 +186,37 @@ final class ModelShapes
     static float projectModel(Camera camera, float[] vx, float[] vy, float[] vz, int n,
         int localX, int localY, int height, int orientation, float[] outX, float[] outY)
     {
-        return projectModel(camera, vx, vy, vz, n, localX, localY, height, orientation, outX, outY, null, SceneShapeRenderer.PARTIAL_NEAR);
+        return projectModel(camera, null, vx, vy, vz, n, localX, localY, height, orientation, outX, outY, null, SceneShapeRenderer.PARTIAL_NEAR);
     }
 
     /** As projectModel, with every vertex's depth in outD too (null: not wanted), and vertices nearer than near left out. */
     static float projectModel(Camera camera, float[] vx, float[] vy, float[] vz, int n,
         int localX, int localY, int height, int orientation, float[] outX, float[] outY, float[] outD, float near)
     {
+        return projectModel(camera, null, vx, vy, vz, n, localX, localY, height, orientation, outX, outY, outD, near);
+    }
+
+    /**
+     * As projectModel, for a model on a boat when boat is set: each vertex is carried into the main world by the boat's
+     * projection (x, height, y) before the camera projects it.
+     */
+    static float projectModel(Camera camera, net.runelite.api.Projection boat, float[] vx, float[] vy, float[] vz, int n,
+        int localX, int localY, int height, int orientation, float[] outX, float[] outY, float[] outD, float near)
+    {
         double angle = (orientation & 2047) * Math.PI / 1024;
         float sin = (float) Math.sin(angle), cos = (float) Math.cos(angle);
-        float[] p = new float[3];
+        float[] p = new float[3], c = boat == null ? null : new float[3];
         float nearest = Float.MAX_VALUE;
         for (int i = 0; i < n; i++)
         {
             float rx = vz[i] * sin + vx[i] * cos;
             float rz = vz[i] * cos - vx[i] * sin;
-            camera.project(localX + rx, localY + rz, height + vy[i], p);
+            if (boat == null) { camera.project(localX + rx, localY + rz, height + vy[i], p); }
+            else
+            {
+                boat.project(localX + rx, height + vy[i], localY + rz, c);
+                camera.project(c[0], c[2], c[1], p);
+            }
             if (!(p[2] >= near)) { outX[i] = Float.NaN; outY[i] = Float.NaN; continue; }
             outX[i] = p[0]; outY[i] = p[1];
             if (outD != null) { outD[i] = p[2]; }

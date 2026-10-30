@@ -864,7 +864,7 @@ final class MarkerSources
         for (NPC npc : tick.npcs)
         {
             if (!look.drawn(npc)) { continue; }
-            // In another world view only the outline, which RuneLite's outline renderer draws in 2D (Highlights.models).
+            // In another world view (a boat) only the outline (Highlights.models), carried into the main world when drawn.
             String key = npc.getWorldView() == top ? "npc:" + npc.getIndex() : "npc:" + npc.getWorldView().getId() + ":" + npc.getIndex() + ":outline";
             look.add(null, result, elsewhere, 0, key, npc, MODEL_STYLES, task);
         }
@@ -920,7 +920,7 @@ final class MarkerSources
         return result;
     }
 
-    /** The outlines in other world views found by the last modelTargets(), for RuneLite's 2D outline renderer. */
+    /** The outlines in other world views (a boat) found by the last modelTargets(); RuneLite's 2D outline where the scene has none. */
     List<ModelTarget> outlinesElsewhere() { return outlinesElsewhere; }
 
     /** Other plugins' outlines in other world views, after those of the last modelTargets(). */

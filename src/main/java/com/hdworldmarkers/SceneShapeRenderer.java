@@ -305,6 +305,15 @@ final class SceneShapeRenderer
      */
     private final float[] billboard = new float[5];
     private boolean billboarding;
+    /**
+     * The boat (a world entity's world view) under the tile, label or model being drawn: its points are carried into the main
+     * world, where the scene objects hang, with the boat's position of this frame; null on the main world. The shape's
+     * anchor in the main world and the level there (see onBoat).
+     */
+    private net.runelite.api.Projection boat;
+    private LocalPoint boatAnchor;
+    private int boatLevel;
+    private final float[] carried = new float[3];
 
     /**
      * Starts a frame; canvasPerPixel converts screen pixels to canvas units (1 / stretch scale).
@@ -319,6 +328,7 @@ final class SceneShapeRenderer
         this.xrayAnchor = xrayAnchor;
         this.xrayLevel = xrayLevel;
         this.camera = camera;
+        boat = null;
         pixel = canvasPerPixel;
         appended.clear();
         frame++;
@@ -343,9 +353,9 @@ final class SceneShapeRenderer
     /** Draws a tile footprint; returns whether it is in the scene this frame. */
     boolean tile(Marker m)
     {
-        WorldView wv = client.getTopLevelWorldView();
         LocalPoint at = m.at();
-        if (unavailable || at.getWorldView() != wv.getId()) { return false; }
+        WorldView wv = unavailable ? null : view(at);
+        if (wv == null) { return false; }
         if ((m.borderWidth <= 0 || m.color.getAlpha() == 0) && m.fill.getAlpha() == 0) { return culled(m.key); }
         layer = m.layer;
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
@@ -353,9 +363,9 @@ final class SceneShapeRenderer
         if (m.dot || m.offX != null) { return facing(m, at, level, height); }
         // A line along one side of the tile (between the side's corners), a line through the tile (Marker.path), both
         // as wide as their border, or a filled shape (Marker.area) built as a tile's footprint is: on the ground.
-        if (m.edge >= 0) { return sampled(m, at, level, height, SIDES[Math.min(m.edge, SIDES.length - 1)], at.getX() - 64, at.getY() - 64, STRIP); }
-        if (m.path != null) { return sampled(m, at, level, height, m.path, at.getX(), at.getY(), PATH); }
-        if (m.area != null) { return sampled(m, at, level, height, m.area, at.getX(), at.getY(), AREA); }
+        if (m.edge >= 0) { return sampled(wv, m, at, level, height, SIDES[Math.min(m.edge, SIDES.length - 1)], at.getX() - 64, at.getY() - 64, STRIP); }
+        if (m.path != null) { return sampled(wv, m, at, level, height, m.path, at.getX(), at.getY(), PATH); }
+        if (m.area != null) { return sampled(wv, m, at, level, height, m.area, at.getX(), at.getY(), AREA); }
         int w = m.width, h = m.height, n = 2 * (w + h);
         ensure(n);
         int x0 = at.getX() - w * 64, y0 = at.getY() - h * 64, k = 0;
@@ -367,7 +377,7 @@ final class SceneShapeRenderer
         if (k < 0)
         {
             // Wholly behind the camera: RuneLite's 2D tile is nothing either, so the overlay need not try it every frame.
-            camera.project(at.getX(), at.getY(), height, point);
+            toCanvas(at.getX(), at.getY(), height, point);
             return point[2] < ModelShapes.NEAR - 64 * (w + h) - 1024 ? culled(m.key) : false;
         }
         // Off screen by its corners alone (a tile's border and mitres stay within a few widths of them): not built.
@@ -389,15 +399,14 @@ final class SceneShapeRenderer
     private static final int STRIP = 0, PATH = 1, AREA = 2;
 
     /** A shape through points on the ground (x, y pairs from x0, y0), at the ground's height there, built as kind says. */
-    private boolean sampled(Marker m, LocalPoint at, int level, int height, int[] xy, int x0, int y0, int kind)
+    private boolean sampled(WorldView wv, Marker m, LocalPoint at, int level, int height, int[] xy, int x0, int y0, int kind)
     {
-        WorldView wv = client.getTopLevelWorldView();
         int n = xy.length / 2, k = 0;
         ensure(n);
         for (int i = 0; i < n; i++) { k = sample(wv, level, x0 + xy[2 * i], y0 + xy[2 * i + 1], k); }
         if (k < 0)
         {
-            camera.project(at.getX(), at.getY(), height, point);
+            toCanvas(at.getX(), at.getY(), height, point);
             return point[2] < ModelShapes.NEAR - 1024 ? culled(m.key) : false;
         }
         if (beside(n, 4 * width(m.borderWidth) + 2)) { return culled(m.key); }
@@ -438,7 +447,7 @@ final class SceneShapeRenderer
     /** Builds the n points in px, py and pd around their centre at the given height; false when it lies too near. */
     private boolean around(LocalPoint at, int height, int n, float borderWidth)
     {
-        camera.project(at.getX(), at.getY(), height, point);
+        toCanvas(at.getX(), at.getY(), height, point);
         return point[2] >= PARTIAL_NEAR && outline.build(px, py, pd, n, point[0], point[1], point[2], width(borderWidth));
     }
 
@@ -463,7 +472,7 @@ final class SceneShapeRenderer
         float[] ox = m.offX != null ? m.offX : DOT_X, oy = m.offX != null ? m.offY : DOT_Y;
         int n = ox.length;
         ensure(n);
-        camera.project(at.getX(), at.getY(), height - m.lift, point);
+        toCanvas(at.getX(), at.getY(), height - m.lift, point);
         if (!(point[2] >= PARTIAL_NEAR)) { return false; }
         float scale = m.offX != null ? camera.scale / point[2] : pixel;
         for (int i = 0; i < n; i++) { px[i] = point[0] + ox[i] * scale; py[i] = point[1] + oy[i] * scale; pd[i] = point[2]; }
@@ -476,15 +485,17 @@ final class SceneShapeRenderer
      */
     boolean label(Marker m, SceneText.Style style)
     {
-        WorldView wv = client.getTopLevelWorldView();
         LocalPoint at = m.at();
-        if (unavailable || at.getWorldView() != wv.getId()) { return false; }
+        WorldView wv = unavailable ? null : view(at);
+        if (wv == null) { return false; }
         int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), m.plane);
         // On the ground at its point, as RuneLite places text over a character (Actor.getCanvasTextLocation).
         int ground = Terrain.heightOnLevel(wv, at.getX(), at.getY(), level);
-        camera.project(at.getX(), at.getY(), ground - m.lift, point);
+        toCanvas(at.getX(), at.getY(), ground - m.lift, point);
         if (!(point[2] >= PARTIAL_NEAR)) { return false; }
-        billboard[0] = at.getX(); billboard[1] = at.getY(); billboard[2] = ground - m.lift;
+        // The point in the main world, where the client's camera finds it when drawing.
+        if (boat != null) { billboard[0] = carried[0]; billboard[1] = carried[2]; billboard[2] = carried[1]; }
+        else { billboard[0] = at.getX(); billboard[1] = at.getY(); billboard[2] = ground - m.lift; }
         float x = point[0], y = point[1], depth = labelDepth(point[2]);
         billboard[3] = x; billboard[4] = y;
         String key = m.labelKey();
@@ -518,11 +529,49 @@ final class SceneShapeRenderer
         return d - Math.max(4, d * 0.01f) - Math.max(1, d * layer * 0.001f) - (white ? Math.max(0.5f, d * 0.0005f) : 0);
     }
 
+    /**
+     * The world view of a tile, label or model at this point: the main world, or the boat it lies on, whose projection into the
+     * main world is then set for this shape (boat, boatAnchor, boatLevel). Null when the boat has none.
+     */
+    private WorldView view(LocalPoint at)
+    {
+        WorldView top = client.getTopLevelWorldView();
+        boat = null;
+        if (at.getWorldView() == top.getId()) { return top; }
+        WorldView wv = client.getWorldView(at.getWorldView());
+        LocalPoint main = wv == null ? null : onMainWorld(top, wv, at.getX(), at.getY(), carried);
+        if (main == null) { return null; }
+        boat = wv.getMainWorldProjection();
+        boatAnchor = main;
+        boatLevel = Terrain.level(top, main.getSceneX(), main.getSceneY(), top.getPlane());
+        return wv;
+    }
+
+    /**
+     * Where a point on a boat's ground lies in the main world now, as a point there (out gets its x, height, y); null
+     * without the boat's projection.
+     */
+    static LocalPoint onMainWorld(WorldView top, WorldView wv, int x, int y, float[] out)
+    {
+        net.runelite.api.Projection p = wv.getMainWorldProjection();
+        if (p == null) { return null; }
+        p.project(x, Terrain.height(wv, x, y, wv.getPlane()), y, out);
+        return new LocalPoint(Math.round(out[0]), Math.round(out[2]), top);
+    }
+
+    /** Projects a point of the shape's world view to the canvas: on a boat carried into the main world first (carried). */
+    private void toCanvas(float x, float y, float height, float[] out)
+    {
+        if (boat == null) { camera.project(x, y, height, out); return; }
+        boat.project(x, height, y, carried);
+        camera.project(carried[0], carried[2], carried[1], out);
+    }
+
     private int sample(WorldView wv, int level, int x, int y, int k)
     {
         if (k < 0) { return k; }
         // Corners on the far scene edge belong to the last tile (heightOnLevel clamps).
-        camera.project(x, y, Terrain.heightOnLevel(wv, x, y, level), point);
+        toCanvas(x, y, Terrain.heightOnLevel(wv, x, y, level), point);
         if (!(point[2] >= PARTIAL_NEAR)) { return -1; }
         px[k] = point[0]; py[k] = point[1]; pd[k] = point[2];
         return k + 1;
@@ -533,8 +582,9 @@ final class SceneShapeRenderer
     {
         layer = t.outline ? OUTLINE_LAYER : t.clickbox ? CLICKBOX_LAYER : HULL_LAYER;
         LocalPoint location = t.location();
-        if (unavailable || location == null || location.getWorldView() != client.getTopLevelWorldView().getId())
-        { return false; }
+        // On a boat its model is carried into the main world as tiles are (view, boat).
+        WorldView wv = unavailable || location == null ? null : view(location);
+        if (wv == null) { return false; }
         int height = t.height(client);
         if (t.actor == null && t.renderable == null) { return false; }
         Projection projected = projection(t);
@@ -549,7 +599,7 @@ final class SceneShapeRenderer
         // Nothing of it projects (all at or behind the camera): RuneLite draws nothing of it either, so no 2D shape.
         // Off screen (not for clickboxes) it is handled by the scene route: do not repeat this work in the 2D fallback.
         if (Float.isNaN(depth) || projected.outside && !t.clickbox) { return culled(t.key); }
-        int level = Terrain.level(client.getTopLevelWorldView(), location.getSceneX(), location.getSceneY(), t.plane());
+        int level = Terrain.level(wv, location.getSceneX(), location.getSceneY(), t.plane());
         boolean asHull = false;
         boolean stale = false;
         if (t.outline && (projected.loops == null || projected.loopsStale && projected.staleFrame != frame))
@@ -720,7 +770,8 @@ final class SceneShapeRenderer
      */
     private boolean unchanged(ModelTarget t, Projection p, LocalPoint location, int height)
     {
-        return t.actor == null && t.renderable instanceof Mesh
+        // A boat moves its objects in the main world without changing their place on it.
+        return boat == null && t.actor == null && t.renderable instanceof Mesh
             && p.camera != null && p.camera.same(camera) && p.localX == location.getX() && p.localY == location.getY()
             && p.height == height && p.orientation == t.orientation() && p.frame == frame - 1;
     }
@@ -758,8 +809,8 @@ final class SceneShapeRenderer
         p.boundingBox = mesh instanceof Model && ((Model) mesh).useBoundingBox();
         // A model partly at or behind the camera keeps its other vertices, as RuneLite's clickbox and hull skip such
         // faces.
-        p.depth = ModelShapes.projectModel(camera, mesh.getVerticesX(), mesh.getVerticesY(), mesh.getVerticesZ(),
-            n, location.getX(), location.getY(), height, t.orientation(), p.x, p.y);
+        p.depth = ModelShapes.projectModel(camera, boat, mesh.getVerticesX(), mesh.getVerticesY(), mesh.getVerticesZ(),
+            n, location.getX(), location.getY(), height, t.orientation(), p.x, p.y, null, PARTIAL_NEAR);
         float minX = Float.POSITIVE_INFINITY, minY = minX, maxX = Float.NEGATIVE_INFINITY, maxY = maxX;
         p.partial = false;
         for (int i = 0; i < n; i++)
@@ -854,6 +905,8 @@ final class SceneShapeRenderer
         // else just above it towards the camera. Later layers slightly nearer, so shapes never z-fight.
         place(xray, false);
         WorldView top = client.getTopLevelWorldView();
+        // On a boat the scene object hangs in the main world under the shape (its points are there already, see toCanvas).
+        if (boat != null) { anchor = boatAnchor; level = boatLevel; }
         boolean shared = xray && (xrayCameraNear || within(xrayAnchor.getX(), xrayAnchor.getY(), xrayHeight, XRAY_SHARED));
         if (shared)
         {
@@ -1075,7 +1128,7 @@ final class SceneShapeRenderer
         float[] bx = {x1, x2, x1, x2, x1, x2, x1, x2}, by = {y1, y1, y1, y1, y2, y2, y2, y2}, bz = {z1, z1, z2, z2, z1, z1, z2, z2};
         float[] cx = new float[8], cy = new float[8];
         // Corners at or behind the camera are left out, as the model's own vertices.
-        if (Float.isNaN(ModelShapes.projectModel(camera, bx, by, bz, 8, localX, localY, height, 0, cx, cy)))
+        if (Float.isNaN(ModelShapes.projectModel(camera, boat, bx, by, bz, 8, localX, localY, height, 0, cx, cy, null, PARTIAL_NEAR)))
         { return null; }
         return ModelShapes.convexHull(cx, cy, 8);
     }

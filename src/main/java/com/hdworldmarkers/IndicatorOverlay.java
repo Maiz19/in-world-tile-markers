@@ -52,7 +52,7 @@ final class IndicatorOverlay extends Overlay
             // Once per frame: the scene route works or not (each mark asked it again).
             boolean scene = plugin.sceneActive();
             // Shapes not in the scene in 2D; outlines with RuneLite's outline renderer, once per object (a wall's two
-            // parts are one outline), and those in other world views (a boat) always.
+            // parts are one outline), also those in other world views (a boat).
             Set<TileObject> outlined = null;
             for (List<ModelTarget> targets : Arrays.asList(plugin.modelTargets(), sources.outlinesElsewhere()))
             {

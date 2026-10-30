@@ -230,7 +230,7 @@ public class HdWorldMarkersPlugin extends Plugin
             renderer.floatingAlphaCap = hdShadows && !transparentShadows ? SceneShapeRenderer.HD_CAP_OPAQUE_SHADOWS : 255;
             renderer.hdLightnessCap = hdNow[2];
             if (hdShadows && transparentShadows) { warnShadowTransparency(); }
-            renderer.begin(camera, 1f / stretchScale(), xray, player.getWorldView().getPlane());
+            renderer.begin(camera, 1f / stretchScale(), xray, client.getTopLevelWorldView().getPlane());
             hover = sources.hover();
             // The player's silhouette is left uncovered by marks through walls, and the In front NPCs' with the option.
             renderer.cutAround(config.charactersInFrontOfTiles() ? player : null,
@@ -245,6 +245,8 @@ public class HdWorldMarkersPlugin extends Plugin
                 for (Marker m : sceneMarkers) { if (m.label != null && !m.label.isEmpty()) { renderer.label(m, style); } }
             }
             for (int i = 0; i < Math.min(MAX_MODELS, modelTargets.size()); i++) { renderer.model(modelTargets.get(i)); }
+            // Outlines of things on a boat, carried into the main world as its tiles are.
+            for (ModelTarget t : sources.outlinesElsewhere()) { renderer.model(t); }
             boolean ok = renderer.end();
             sceneUnavailable = !ok;
             // A minute without failing: the next failure rests the shortest time again.
@@ -270,7 +272,8 @@ public class HdWorldMarkersPlugin extends Plugin
     {
         WorldView wv = client.getTopLevelWorldView();
         LocalPoint at = player.getLocalLocation();
-        if (player.getWorldView() != wv) { return at; }
+        // On a boat: its spot in the main world now; null (not through walls) without the boat's projection.
+        if (player.getWorldView() != wv) { return SceneShapeRenderer.onMainWorld(wv, player.getWorldView(), at.getX(), at.getY(), new float[3]); }
         int plane = wv.getPlane();
         // Found again as you move, and every tick (doors open and close).
         int[] k = anchorTilesKey;

@@ -9,6 +9,7 @@
 - **Outlines** no longer flicker. Hulls and outlines sit right on docks and decks.
 - Through walls and Player in front of marks now work as the game draws things. Object marks show through walls too; you hide one only when you stand in front of it.
 - Attack paths stop where your weapon reaches: halberds 2 tiles, salamanders diagonally too, ranged weapons and powered staves their own range (2 more on longrange, up to 10), spells 10. Telekinetic Grab no longer walks to the item.
+- On a boat (Sailing), tiles, text and outlines are drawn in the game world as on land: sharp, with the border width you set, instead of thick 2D lines.
 - Right-click options start with **HD**.
 - More highlight options for plugin developers.
 - Faster, less code.
