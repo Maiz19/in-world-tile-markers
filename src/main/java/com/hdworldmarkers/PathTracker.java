@@ -147,6 +147,7 @@ final class PathTracker extends Overlay implements KeyListener
     void startUp()
     {
         activePath.clear(); hoverPath.clear(); predictedPath.clear();
+        routes.rescan();
         click = null;
         ctrl = keyActive = keyHover = pressed = false;
         overlays.add(this);
@@ -230,7 +231,13 @@ final class PathTracker extends Overlay implements KeyListener
     @Subscribe public void onGameStateChanged(GameStateChanged e)
     {
         if (e.getGameState() == GameState.HOPPING || e.getGameState() == GameState.LOGGING_IN) { activePath.clear(); }
+        if (e.getGameState() == GameState.LOADING) { routes.sceneLoading(); }
     }
+
+    /** The Gauntlet's unlit nodes, for routes: a room not opened yet is closed. */
+    @Subscribe public void onGameObjectSpawned(GameObjectSpawned e) { routes.spawned(e.getGameObject()); }
+
+    @Subscribe public void onGameObjectDespawned(GameObjectDespawned e) { routes.despawned(e.getGameObject()); }
 
     /**
      * Found on the next client tick, when the game knows the tile a left-click Walk here goes to; an open menu keeps

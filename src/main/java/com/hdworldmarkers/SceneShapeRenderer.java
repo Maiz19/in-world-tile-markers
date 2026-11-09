@@ -1474,9 +1474,12 @@ final class SceneShapeRenderer
 
     /**
      * The actors this frame whose silhouettes marks through walls leave out (see cuts): the local player (null for not)
-     * and the NPCs put In front, at most MAX_CUTS of them together, the first ones of the list.
+     * and the NPCs put In front, at most MAX_CUTS of them together, the first ones of the list. Each in the pose it is
+     * drawn in when poses (null: none) has one from the plugin that changes it at draw time.
      */
-    void cutAround(Player p, List<NPC> npcs)
+    void cutAround(Player p, List<NPC> npcs) { cutAround(p, npcs, null); }
+
+    void cutAround(Player p, List<NPC> npcs, DrawnPose poses)
     {
         cuts = Collections.emptyList();
         if (!xray || unavailable) { npcShapes.clear(); return; }
@@ -1504,7 +1507,14 @@ final class SceneShapeRenderer
             PlayerSilhouette s = a == p ? playerShape : npcShapes.computeIfAbsent((NPC) a, n -> new PlayerSilhouette());
             if (a != p) { kept.add((NPC) a); }
             Model model = a.getModel();
-            if (model != null && s.take(model, at.getX(), at.getY(), height, a.getCurrentOrientation(), occluders)) { taken.add(s); }
+            if (model == null) { continue; }
+            // Drawn in another pose than the client made (Keyframe Smoothing): asked before the model is copied.
+            boolean drawn = poses != null && poses.ask(a, model);
+            if (s.take(model, at.getX(), at.getY(), height, a.getCurrentOrientation(), occluders))
+            {
+                if (drawn) { s.drawnAs(poses.x, poses.y, poses.z); }
+                taken.add(s);
+            }
         }
         // An NPC no longer In front, or gone: its silhouette and arrays with it.
         npcShapes.keySet().retainAll(kept);

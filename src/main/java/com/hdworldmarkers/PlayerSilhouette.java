@@ -162,6 +162,14 @@ final class PlayerSilhouette
         return true;
     }
 
+    /** Puts the model taken in the pose it is drawn in (see DrawnPose): its vertices, at least as many as the model's. */
+    synchronized void drawnAs(float[] x, float[] y, float[] z)
+    {
+        System.arraycopy(x, 0, body.x, 0, body.n);
+        System.arraycopy(y, 0, body.y, 0, body.n);
+        System.arraycopy(z, 0, body.z, 0, body.n);
+    }
+
     /**
      * The silhouette as last drawn if that was with this camera, else as cut would trace it: to size the marks' cuts. A
      * frame is built with the camera the client drew the last one with, so the pose of a frame before costs no trace.

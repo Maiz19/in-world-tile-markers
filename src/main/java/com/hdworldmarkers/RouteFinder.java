@@ -10,6 +10,7 @@ import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ObjectID;
 
 /**
  * Routes and steps as the game takes them, on the collision flags of your level. The server finds the route (the
@@ -21,6 +22,9 @@ import net.runelite.api.coords.WorldPoint;
  *
  * Beyond the loaded area the client has no collision flags. For a predicted walk there (findBeyond, stepBeyond) they
  * are approximated from what a renderer's extended view shows: water and other blocked floor, walls, and objects.
+ *
+ * In the Gauntlet the client's flags leave every doorway open, also into rooms not opened yet, which the server keeps
+ * you out of. Such a doorway has an unlit node on each side; the tiles beside an unlit node count as blocked.
  */
 // Not final: the tests spy on it, to count how often routes are found.
 class RouteFinder
@@ -60,6 +64,15 @@ class RouteFinder
     private static final int BORDER = 6;
     /** While set (findBeyond, stepBeyond), the border and everything beyond take the extended view's flags. */
     private boolean borderless;
+    /** The Gauntlet's door nodes before they are lit (both Gauntlets): the room beyond is not opened yet. */
+    private static final Set<Integer> UNLIT_NODES = new HashSet<>(Arrays.asList(ObjectID.PRIF_GAUNTLET_DOOR_WALL_UNLIT_01,
+        ObjectID.PRIF_GAUNTLET_DOOR_WALL_UNLIT_02, ObjectID.PRIF_GAUNTLET_DOOR_WALL_UNLIT_01_HM, ObjectID.PRIF_GAUNTLET_DOOR_WALL_UNLIT_02_HM));
+    /** The unlit nodes in the scene, kept by spawned/despawned; the scene is searched for them once after rescan. */
+    private final Set<GameObject> unlitNodes = new HashSet<>();
+    private boolean scanNodes, closedStale;
+    /** Per scene tile whether it lies beside an unlit node (its doorway is closed); null when none does. */
+    private boolean[][] closed;
+    private int closedBaseX, closedBaseY, closedPlane = -1;
 
     /** Takes the collision flags of the level you are on; false while there are none. */
     boolean load(WorldView wv)
@@ -70,8 +83,86 @@ class RouteFinder
         flags = maps[plane].getFlags();
         baseX = wv.getBaseX();
         baseY = wv.getBaseY();
+        if (scanNodes) { scan(wv); }
+        if (closedStale || baseX != closedBaseX || baseY != closedBaseY || plane != closedPlane) { closeDoorways(); }
         extended(wv);
         return true;
+    }
+
+    /** Notes a Gauntlet node that is not lit: its doorway is closed. */
+    void spawned(GameObject o)
+    {
+        if (UNLIT_NODES.contains(o.getId()) && unlitNodes.add(o)) { closedStale = true; }
+    }
+
+    /** Notes a node gone (lit, or the scene left): its doorway opens. */
+    void despawned(GameObject o)
+    {
+        if (unlitNodes.remove(o)) { closedStale = true; }
+    }
+
+    /** A new scene loads: its objects spawn again. */
+    void sceneLoading()
+    {
+        unlitNodes.clear();
+        closedStale = true;
+    }
+
+    /** Started again (objects spawned meanwhile were missed): the next load searches the scene for unlit nodes. */
+    void rescan() { scanNodes = true; }
+
+    private void scan(WorldView wv)
+    {
+        scanNodes = false;
+        sceneLoading();
+        Tile[][][] tiles = wv.getScene() == null ? null : wv.getScene().getTiles();
+        if (tiles == null) { return; }
+        for (Tile[][] level : tiles)
+        {
+            for (Tile[] row : level)
+            {
+                for (Tile t : row)
+                {
+                    GameObject[] objects = t == null ? null : t.getGameObjects();
+                    if (objects == null) { continue; }
+                    for (GameObject o : objects) { if (o != null) { spawned(o); } }
+                }
+            }
+        }
+    }
+
+    /** Marks the tiles beside the unlit nodes of your level. */
+    private void closeDoorways()
+    {
+        closedStale = false;
+        closedBaseX = baseX; closedBaseY = baseY; closedPlane = plane;
+        closed = null;
+        for (GameObject o : unlitNodes)
+        {
+            Point sw = o.getSceneMinLocation();
+            if (sw == null || o.getPlane() != plane) { continue; }
+            for (int[] t : doorway(sw.getX(), sw.getY(), o.sizeX(), o.sizeY()))
+            {
+                if (t[0] < 0 || t[1] < 0 || t[0] >= flags.length || t[1] >= flags[t[0]].length) { continue; }
+                if (closed == null) { closed = new boolean[flags.length][flags[0].length]; }
+                closed[t[0]][t[1]] = true;
+            }
+        }
+    }
+
+    /**
+     * The tiles {x, y} beside an unlit node, from its south-west tile and size. A node is two tiles deep through its
+     * wall and one along it, with the doorway on one side along the wall and wall on the other; both are taken.
+     */
+    private static List<int[]> doorway(int x, int y, int w, int h)
+    {
+        List<int[]> out = new ArrayList<>();
+        for (int i = 0; i < Math.max(w, h); i++)
+        {
+            if (w >= h) { out.add(new int[]{x + i, y - 1}); out.add(new int[]{x + i, y + h}); }
+            else { out.add(new int[]{x - 1, y + i}); out.add(new int[]{x + w, y + i}); }
+        }
+        return out;
     }
 
     /** Flags for the extended scene, as the client makes its own: floor, and the walls and objects that block walking. */
@@ -121,6 +212,7 @@ class RouteFinder
                     if (at == null) { continue; }
                     int sw = Math.floorDiv(at.getX() - (o.sizeX() - 1) * 64, 128) + extOffset, sy = Math.floorDiv(at.getY() - (o.sizeY() - 1) * 64, 128) + extOffset;
                     for (int i = 0; i < o.sizeX(); i++) { for (int j = 0; j < o.sizeY(); j++) { block(sw + i, sy + j, 0x100); } }
+                    if (UNLIT_NODES.contains(o.getId())) { for (int[] d : doorway(sw, sy, o.sizeX(), o.sizeY())) { block(d[0], d[1], 0x100); } }
                 }
             }
         }
@@ -386,11 +478,13 @@ class RouteFinder
 
     /**
      * The flags of a scene tile; beyond the loaded area the extended view's where known, else every tile is blocked.
-     * For a predicted walk (borderless) the loaded area's border takes the extended view's flags too.
+     * For a predicted walk (borderless) the loaded area's border takes the extended view's flags too. A tile beside an
+     * unlit node is blocked.
      */
     private int flag(int x, int y)
     {
         boolean inner = x >= 0 && y >= 0 && x < flags.length && y < flags[x].length;
+        if (inner && closed != null && closed[x][y]) { return flags[x][y] | 0x100; }
         if (inner && !(borderless && ext != null && (x < BORDER || y < BORDER || x >= flags.length - BORDER || y >= flags[x].length - BORDER)))
         { return flags[x][y]; }
         if (ext == null || !borderless && !inner) { return inner ? flags[x][y] : -1; }

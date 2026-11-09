@@ -51,6 +51,7 @@ public class HdWorldMarkersPlugin extends Plugin
     @Inject private SceneShapeRenderer renderer;
     @Inject private PathTracker paths;
     @Inject private ExternalMarks externalMarks;
+    @Inject private DrawnPose drawnPose;
     @Inject private Marking marking;
     @Inject private InteractHighlight interact;
     @Inject private IndicatorOverlay overlay;
@@ -234,7 +235,7 @@ public class HdWorldMarkersPlugin extends Plugin
             hover = sources.hover();
             // The player's silhouette is left uncovered by marks through walls, and the In front NPCs' with the option.
             renderer.cutAround(config.charactersInFrontOfTiles() ? player : null,
-                config.npcsInFrontOfTiles() ? sources.npcsInFront() : Collections.emptyList());
+                config.npcsInFrontOfTiles() ? sources.npcsInFront() : Collections.emptyList(), drawnPose);
             for (Marker m : sceneMarkers) { renderer.tile(m); }
             // The hovered tile last: shapes of one tile are drawn in the order they are added, so it lies over the
             // tiles under it with its own opacity.
