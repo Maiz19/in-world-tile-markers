@@ -103,8 +103,7 @@ final class PlayerSilhouette
             boolean both = margin == GROUND_IN_FRONT;
             for (int f = 0; f < faces; f++)
             {
-                int i = a[f], j = b[f], k = c[f];
-                hidden[f] = skip[f] || !both && (px[j] - px[i]) * (py[k] - py[i]) - (py[j] - py[i]) * (px[k] - px[i]) >= 0;
+                hidden[f] = skip[f] || !both && !Silhouette.front(px, py, a[f], b[f], c[f]);
             }
         }
     }

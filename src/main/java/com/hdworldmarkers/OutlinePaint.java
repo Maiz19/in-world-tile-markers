@@ -35,10 +35,19 @@ final class OutlinePaint
     /** How far a curve (a round corner of the border) may lie from its straight pieces, in canvas pixels. */
     private static final double FLATNESS = 0.25;
 
-    /** The painted region of loops (the silhouette, its holes wound the other way) and a border this wide; null for none. */
+    /**
+     * The painted region of loops (the silhouette, its holes wound the other way) and a border this wide; null for none.
+     * A border thinner than fill tells points apart (SAME) is none: its rings were too close to nest, and the model was
+     * painted.
+     */
     static Mesh paint(List<float[]> loops, float width)
     {
-        if (loops.isEmpty() || !(width > 0)) { return null; }
+        return loops.isEmpty() || !(width >= SAME) ? null : fill(region(loops, width));
+    }
+
+    /** The painted region (see paint) as an Area of straight pieces. */
+    static Area region(List<float[]> loops, float width)
+    {
         double outerSign = 0, largest = 0;
         for (float[] l : loops)
         {
@@ -46,6 +55,8 @@ final class OutlinePaint
             if (Math.abs(a) > largest) { largest = Math.abs(a); outerSign = Math.signum(a); }
         }
         Path2D.Float silhouette = new Path2D.Float(Path2D.WIND_EVEN_ODD);
+        Path2D.Double grown = new Path2D.Double();
+        double sign = outerSign == 0 ? 1 : outerSign, sum = 0;
         for (float[] l : loops)
         {
             if (l.length < 6) { continue; }
@@ -56,16 +67,96 @@ final class OutlinePaint
             silhouette.moveTo(l[0], l[1]);
             for (int k = 2; k < l.length; k += 2) { silhouette.lineTo(l[k], l[k + 1]); }
             silhouette.closePath();
+            sum += sign * grow(l, sign, width, grown);
         }
-        // Within the width of the silhouette's edge, on the outside: its edge stroked both ways, less the silhouette.
-        Shape stroke = new BasicStroke(2 * width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND).createStrokedShape(silhouette);
+        Area model = new Area(silhouette);
+        double area = 0;
+        for (double[] r : rings(model, FLATNESS, Double.MIN_VALUE)) { area += area(r); }
+        // Within the width of the silhouette, less the silhouette. The loops moved out (see grow) cover that when they
+        // neither cross nor nest the wrong way round, as then the silhouette's area is the sum of theirs (a simplified
+        // outline crossed itself in about one model in 600). Else within the width of its edge either way: the edge
+        // stroked both ways, which took Area three times as long.
+        Shape near = Math.abs(Math.abs(area) - sum) < 1e-3 ? grown
+            : new BasicStroke(2 * width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND).createStrokedShape(silhouette);
         // In straight pieces first: on the round corners' curves Area took many times as long.
-        PathIterator curves = stroke.getPathIterator(null, FLATNESS);
+        PathIterator curves = near.getPathIterator(null, FLATNESS);
         Path2D.Double flat = new Path2D.Double(curves.getWindingRule());
         flat.append(curves, false);
         Area painted = new Area(flat);
-        painted.subtract(new Area(silhouette));
-        return fill(painted);
+        painted.subtract(model);
+        return painted;
+    }
+
+    /**
+     * Adds a loop moved out by w to path, returns its area. Outward is to the right of its edges for sign 1 in y-up terms,
+     * as for every loop of a silhouette whose holes are wound the other way. Inside the loops added (non-zero) lies then
+     * all within w of the silhouette: each edge's strip on the outside, and where the loop turns away from the outside
+     * the round corner between two strips. Where it turns towards the outside the strips overlap: they go through the
+     * loop's point, or are cut where they cross when the corner is no sharper than a right angle and the cut within half
+     * of either edge (what is cut off then lies in both strips, and in no other cut).
+     */
+    private static double grow(float[] l, double sign, double w, Path2D.Double path)
+    {
+        // Without points repeated: an edge of no length has no outside.
+        int n = 0;
+        double[] x = new double[l.length / 2], y = new double[x.length];
+        for (int k = 0; k < l.length; k += 2)
+        {
+            if (n == 0 || l[k] != x[n - 1] || l[k + 1] != y[n - 1]) { x[n] = l[k]; y[n++] = l[k + 1]; }
+        }
+        while (n > 1 && x[n - 1] == x[0] && y[n - 1] == y[0]) { n--; }
+        if (n < 2) { return 0; }
+        double area = 0, ux = x[1] - x[0], uy = y[1] - y[0], ulen = Math.hypot(ux, uy);
+        ux /= ulen; uy /= ulen;
+        // From the middle of the first edge moved out (no cut reaches it) round to it.
+        path.moveTo((x[0] + x[1]) / 2 + w * sign * uy, (y[0] + y[1]) / 2 - w * sign * ux);
+        for (int k = 1; k <= n; k++)
+        {
+            int i = k % n, next = (k + 1) % n;
+            double vx = x[next] - x[i], vy = y[next] - y[i], vlen = Math.hypot(vx, vy);
+            vx /= vlen; vy /= vlen;
+            area += x[i] * y[next] - x[next] * y[i];
+            double cross = ux * vy - uy * vx, dot = ux * vx + uy * vy, turn = sign * cross;
+            // The outward normals of the edge before and after.
+            double ax = sign * uy, ay = -sign * ux, bx = sign * vy, by = -sign * vx;
+            if (turn > 0 || turn == 0 && dot < 0)
+            {
+                path.lineTo(x[i] + w * ax, y[i] + w * ay);
+                if (dot < 0)
+                {
+                    // Wider than a right angle: in two halves, as BasicStroke does.
+                    double mx = sign * (by - ay), my = sign * (ax - bx), m = Math.hypot(mx, my);
+                    arc(path, x[i], y[i], w, sign, ax, ay, mx / m, my / m);
+                    arc(path, x[i], y[i], w, sign, mx / m, my / m, bx, by);
+                }
+                else { arc(path, x[i], y[i], w, sign, ax, ay, bx, by); }
+            }
+            else if (dot >= 0 && 2 * w * Math.abs(cross) <= Math.min(ulen, vlen))
+            {
+                path.lineTo(x[i] + w * (ax + bx) / (1 + dot), y[i] + w * (ay + by) / (1 + dot));
+            }
+            else
+            {
+                path.lineTo(x[i] + w * ax, y[i] + w * ay);
+                path.lineTo(x[i], y[i]);
+                path.lineTo(x[i] + w * bx, y[i] + w * by);
+            }
+            ux = vx; uy = vy; ulen = vlen;
+        }
+        path.closePath();
+        return area / 2;
+    }
+
+    /**
+     * The curve BasicStroke draws for a round corner (at most a right angle) around (cx, cy) from normal a to normal b,
+     * sign's way round: flattened, the same pieces as the stroke's.
+     */
+    private static void arc(Path2D.Double path, double cx, double cy, double w, double sign, double ax, double ay, double bx, double by)
+    {
+        double half = (ax * bx + ay * by) / 2;
+        if (half >= 0.5) { path.lineTo(cx + w * bx, cy + w * by); return; }
+        double k = sign * w * 4 / 3 * Math.sqrt(0.5 - half) / (1 + Math.sqrt(half + 0.5));
+        path.curveTo(cx + w * ax - k * ay, cy + w * ay + k * ax, cx + w * bx + k * by, cy + w * by - k * bx, cx + w * bx, cy + w * by);
     }
 
     /** A region (an Area of straight pieces) as triangles; null for an empty one. */
@@ -76,15 +167,31 @@ final class OutlinePaint
         // A ring inside an odd number of others is a hole, and goes with the smallest ring around it; the others are
         // outer rings.
         int count = rings.size();
-        double[] areas = new double[count];
-        for (int r = 0; r < count; r++) { areas[r] = Math.abs(area(rings.get(r))); }
+        double[] areas = new double[count], box = new double[count * 4];
+        for (int r = 0; r < count; r++)
+        {
+            double[] g = rings.get(r);
+            areas[r] = Math.abs(area(g));
+            box[r * 4] = box[r * 4 + 1] = Double.MAX_VALUE;
+            box[r * 4 + 2] = box[r * 4 + 3] = -Double.MAX_VALUE;
+            for (int k = 0; k < g.length; k += 2)
+            {
+                box[r * 4] = Math.min(box[r * 4], g[k]); box[r * 4 + 1] = Math.min(box[r * 4 + 1], g[k + 1]);
+                box[r * 4 + 2] = Math.max(box[r * 4 + 2], g[k]); box[r * 4 + 3] = Math.max(box[r * 4 + 3], g[k + 1]);
+            }
+        }
         int[] parent = new int[count], depth = new int[count];
         for (int r = 0; r < count; r++)
         {
             parent[r] = -1;
             for (int o = 0; o < count; o++)
             {
-                if (o == r || areas[o] <= areas[r] || !inside(rings.get(o), rings.get(r))) { continue; }
+                // Not inside a ring whose box (and side's margin) it leaves: the test walked all of that ring's edges.
+                if (o == r || areas[o] <= areas[r] || box[o * 4] > box[r * 4] + 1e-4 || box[o * 4 + 1] > box[r * 4 + 1] + 1e-4
+                    || box[o * 4 + 2] < box[r * 4 + 2] - 1e-4 || box[o * 4 + 3] < box[r * 4 + 3] - 1e-4 || !inside(rings.get(o), rings.get(r)))
+                {
+                    continue;
+                }
                 depth[r]++;
                 if (parent[r] < 0 || areas[o] < areas[parent[r]]) { parent[r] = o; }
             }

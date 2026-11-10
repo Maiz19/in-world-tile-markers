@@ -101,6 +101,10 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "predictWalk", name = "Predict walk target", description = "After Walk here, show the clicked tile as destination and a predicted path, also when you click beyond the loaded area (such as 117 HD's extended terrain). Beyond it the path follows what the extended view shows (heights, water, walls, objects) as far as it is loaded, then a straight line.", position = 2, section = generalSection)
     default boolean predictWalk() { return true; }
 
+    @Range(max = SceneShapeRenderer.MAX_WORKERS)
+    @ConfigItem(keyName = "outlineThreads", name = "Outline threads", description = "Extra CPU threads that work out NPC and object outlines and clickboxes. More is faster with several of them in view, as long as your CPU has a free core for each: 3 suits a CPU with 4 cores, 7 one with 8 or more. Above 7 nothing is gained. 0 leaves all to the game's own thread", position = 6, section = generalSection)
+    default int outlineThreads() { return SceneShapeRenderer.WORKERS; }
+
     // Text
 
     @ConfigItem(keyName = "hdText", name = "Render text in HD", description = "Draw the text of marks in the game world like the marks themselves, sharp in stretched mode, instead of as 2D text", position = 0, section = textSection)

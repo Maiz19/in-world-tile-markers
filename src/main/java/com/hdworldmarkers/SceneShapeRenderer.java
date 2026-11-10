@@ -1,9 +1,18 @@
 package com.hdworldmarkers;
 
+import com.google.common.base.Throwables;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.awt.Color;
 import java.awt.Shape;
 import java.util.*;
 import java.util.Deque;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.RequiredArgsConstructor;
@@ -45,13 +54,30 @@ final class SceneShapeRenderer
     private final Map<Object, Projection> projections = new IdentityHashMap<>();
     private int frame;
     /**
-     * New outline traces per frame are limited to this much time; the rest move their last trace along (see model). A
-     * real NPC model takes about half a millisecond, so a few are traced every frame and a crowd each every few frames.
+     * New outline traces per frame are limited to this much time per thread that traces them (see models); the rest
+     * move their last trace along (see prepare). A real NPC model takes about half a millisecond, so a few are traced
+     * every frame and a crowd each every few frames.
      */
-    private static final long OUTLINE_BUDGET_NANOS = 1_500_000;
+    long outlineBudget = 1_500_000;
     /** Frames an outline's last trace may stand in for a new one over the budget; then it is traced anyway. */
     static final int STALE_OUTLINE_FRAMES = 2;
+    /**
+     * What the outlines to be traced this frame are expected to take: each what its model's last trace took. Decided
+     * before they are traced, on several threads at once, so their times are not known one after another.
+     */
     private long outlineNanos;
+    /**
+     * Threads besides the client thread for traces, outline regions and clickboxes (see models), started and stopped
+     * with the plugin: as many as the user set, by default three, which with the client thread a machine for the GPU
+     * plugins has cores for. Set, as plugins may not ask the machine how many cores it has.
+     */
+    static final int WORKERS = 3, MAX_WORKERS = 7;
+    /** The canvas pixels an outline covers at most to be traced by a worker (see models). */
+    private static final float WORKER_CELLS = 1 << 18;
+    private int workerCount;
+    private volatile ExecutorService workers;
+    /** Scratch for traces per worker task of a frame (see computeAll); the client thread's is silhouetteScratch. */
+    private final Silhouette.Scratch[] workerScratch = new Silhouette.Scratch[MAX_WORKERS];
 
     /** Models no scene object uses now, kept for the next ones: making and uploading a model costs. */
     private final Deque<Spare> spareCarriers = new ArrayDeque<>();
@@ -123,6 +149,8 @@ final class SceneShapeRenderer
          */
         List<float[]> traced;
         int tracedFrame;
+        /** What its last trace took, with the region it paints (see compute): what the next is expected to; before the first, a real NPC model's. */
+        long traceNanos = 500_000;
         /**
          * The loops are the last trace moved (over the budget), in staleFrame: traced again in a later frame, also when
          * the projection comes out the same (a camera that stopped would otherwise keep them).
@@ -149,6 +177,34 @@ final class SceneShapeRenderer
         /** The object's model part this is of (null for an NPC); its other part, of walls and decorations, is next. */
         Renderable part;
         Projection next;
+    }
+
+    /**
+     * A model target this frame: what prepare found on the client thread, what compute makes of it on any thread, and
+     * what finish draws with, back on the client thread.
+     */
+    @RequiredArgsConstructor
+    private static final class Job
+    {
+        final ModelTarget t;
+        final Projection p;
+        final LocalPoint location;
+        final int level;
+        /** The boat it is on, as view set it (see boat). */
+        final net.runelite.api.Projection boat;
+        final LocalPoint boatAnchor;
+        final int boatLevel;
+        /** An outline traced anew; its last trace moved instead (over the budget); drawn as a hull border (no faces). */
+        boolean trace, stale, asHull;
+        /** Its own float clickbox (see clickbox), in this viewport. */
+        boolean box;
+        int viewX, viewWidth, viewHeight;
+        float width;
+        /** What compute made: the region its outline paints, its clickbox. */
+        OutlinePaint.Mesh paint;
+        List<float[]> polygons;
+        /** The next job of the same projection and kind, computed after this one on the same thread (see models). */
+        Job next;
     }
     private final Silhouette.Scratch silhouetteScratch = new Silhouette.Scratch();
     private final ScreenOutline outline = new ScreenOutline();
@@ -580,85 +636,203 @@ final class SceneShapeRenderer
     /** Draws a model's hull, clickbox or outline; returns whether it is in the scene this frame. */
     boolean model(ModelTarget t)
     {
-        layer = t.outline ? OUTLINE_LAYER : t.clickbox ? CLICKBOX_LAYER : HULL_LAYER;
+        Job j = prepare(t, 1);
+        if (j == null) { return false; }
+        compute(j, silhouetteScratch);
+        return finish(j);
+    }
+
+    /**
+     * Draws the targets as model does, in their order, but first computes all their traces, outline regions and
+     * clickboxes (most of a frame with NPCs marked) on the workers and the client thread at once. The client is only
+     * read on the client thread (prepare, finish); one projection's outlines, and its clickboxes, are computed one after
+     * another on one thread, in their order, as model computes them.
+     */
+    void models(List<ModelTarget> targets)
+    {
+        ExecutorService pool = workers;
+        int threads = pool == null ? 1 : workerCount + 1;
+        List<Job> jobs = new ArrayList<>(targets.size()), chains = new ArrayList<>(), own = new ArrayList<>();
+        Map<Projection, Job[]> last = new IdentityHashMap<>();
+        for (ModelTarget t : targets)
+        {
+            Job j = prepare(t, threads);
+            if (j == null) { continue; }
+            jobs.add(j);
+            if (!j.box && (!t.outline || j.asHull)) { continue; }
+            Job[] tail = last.computeIfAbsent(j.p, p -> new Job[2]);
+            int kind = j.box ? 1 : 0;
+            // An outline over much of the screen is traced on this thread: its scratch is large, and every worker that
+            // traced one would keep as much.
+            if (tail[kind] == null) { (kind == 0 && j.p.width * j.p.height2d > WORKER_CELLS ? own : chains).add(j); } else { tail[kind].next = j; }
+            tail[kind] = j;
+        }
+        computeAll(chains, own, pool, threads);
+        for (Job j : jobs) { finish(j); }
+    }
+
+    /**
+     * Computes the chains (a job and its next ones), taken one at a time by the workers and this thread, which first
+     * computes its own, and returns when all are done, throwing the first failure. Only chains a worker took are waited for: one that never started
+     * (busy, or stopped with the plugin) finds none left, so it cannot hold up the frame.
+     */
+    private void computeAll(List<Job> chains, List<Job> own, ExecutorService pool, int threads)
+    {
+        AtomicInteger next = new AtomicInteger(), left = new AtomicInteger(chains.size());
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        Consumer<Silhouette.Scratch> take = scratch -> {
+            for (int i; (i = next.getAndIncrement()) < chains.size(); )
+            {
+                try { for (Job j = chains.get(i); j != null; j = j.next) { compute(j, scratch); } }
+                catch (RuntimeException | Error ex) { failure.compareAndSet(null, ex); }
+                finally { if (left.decrementAndGet() == 0) { done.complete(null); } }
+            }
+        };
+        try
+        {
+            // A task's scratch is used only while it computes a chain, so never by two at once: a task of an earlier frame
+            // that starts late finds no chain.
+            for (int w = 0; w < Math.min(threads, chains.size()) - 1; w++)
+            {
+                Silhouette.Scratch scratch = workerScratch[w] == null ? (workerScratch[w] = new Silhouette.Scratch()) : workerScratch[w];
+                pool.execute(() -> take.accept(scratch));
+            }
+        }
+        catch (RejectedExecutionException ex)
+        {
+            // Stopped with the plugin: this thread computes the rest.
+        }
+        finally
+        {
+            // Also when a worker could not be started at all: no chain may be left to a worker after this frame.
+            for (Job c : own)
+            {
+                try { for (Job j = c; j != null; j = j.next) { compute(j, silhouetteScratch); } }
+                catch (RuntimeException | Error ex) { failure.compareAndSet(null, ex); }
+            }
+            take.accept(silhouetteScratch);
+            if (!chains.isEmpty()) { done.join(); }
+        }
+        if (failure.get() != null) { Throwables.throwIfUnchecked(failure.get()); }
+    }
+
+    /**
+     * The client thread's part of model before compute: the target's projection, and for an outline whether it is
+     * traced anew, its last trace moved, or a hull border drawn. Null when there is nothing to draw.
+     */
+    private Job prepare(ModelTarget t, int threads)
+    {
         LocalPoint location = t.location();
         // On a boat its model is carried into the main world as tiles are (view, boat).
         WorldView wv = unavailable || location == null ? null : view(location);
-        if (wv == null) { return false; }
+        if (wv == null) { return null; }
         int height = t.height(client);
-        if (t.actor == null && t.renderable == null) { return false; }
+        if (t.actor == null && t.renderable == null) { return null; }
         Projection projected = projection(t);
         if (projected.frame != frame && !unchanged(t, projected, location, height))
         {
             Mesh<?> mesh = t.mesh();
-            if (mesh == null) { return false; }
+            if (mesh == null) { return null; }
             project(t, mesh, projected, location, height);
         }
         projected.frame = frame;
-        float depth = projected.depth;
         // Nothing of it projects (all at or behind the camera): RuneLite draws nothing of it either, so no 2D shape.
         // Off screen (not for clickboxes) it is handled by the scene route: do not repeat this work in the 2D fallback.
-        if (Float.isNaN(depth) || projected.outside && !t.clickbox) { return culled(t.key); }
-        int level = Terrain.level(wv, location.getSceneX(), location.getSceneY(), t.plane());
-        boolean asHull = false;
-        boolean stale = false;
-        if (t.outline && (projected.loops == null || projected.loopsStale && projected.staleFrame != frame))
+        if (Float.isNaN(projected.depth) || projected.outside && !t.clickbox) { culled(t.key); return null; }
+        Job j = new Job(t, projected, location, Terrain.level(wv, location.getSceneX(), location.getSceneY(), t.plane()), boat, boatAnchor, boatLevel);
+        j.width = width(t.borderWidth);
+        // Traced once a frame at most (see compute, which sets the loops later).
+        if (t.outline && projected.tracedFrame != frame && (projected.loops == null || projected.loopsStale && projected.staleFrame != frame))
         {
             // Over this frame's budget: the outline traced last, moved to where the model is now, rather than a hull border
             // for a frame (outlines flipped between the two in a crowd). At most a few frames old: past that it is traced
             // anyway, or the farthest outlines would never be traced again. A new outline (one just hovered) is traced at
-            // once too: a hull border first flickered in before it.
-            boolean over = outlineNanos > OUTLINE_BUDGET_NANOS;
-            if (over && projected.traced != null && frame - projected.tracedFrame <= STALE_OUTLINE_FRAMES)
+            // once too: a hull border first flickered in before it. Each thread that traces has the budget.
+            if (outlineNanos / threads > outlineBudget && projected.traced != null && frame - projected.tracedFrame <= STALE_OUTLINE_FRAMES)
             {
-                stale = true;
-                projected.loopsStale = true;
+                j.stale = projected.loopsStale = true;
                 projected.staleFrame = frame;
                 projected.loops = moved(projected.traced, projected.tracedCenterX, projected.tracedCenterY, projected.tracedWidth,
                     projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d);
             }
+            else if (faces(t, projected))
+            {
+                j.trace = true;
+                projected.tracedFrame = frame;
+                projected.loopsStale = false;
+                projected.tracedCenterX = projected.centerX; projected.tracedCenterY = projected.centerY;
+                projected.tracedWidth = projected.width; projected.tracedHeight = projected.height2d;
+                outlineNanos += projected.traceNanos;
+            }
+            else { j.asHull = true; }
+        }
+        j.box = t.clickbox && !twoModels(t.object);
+        if (j.box)
+        {
+            // Faces the clickbox may need are copied here, from the client's model (see clickbox).
+            if (!projected.boundingBox) { faces(t, projected); }
+            j.viewX = client.getViewportXOffset(); j.viewWidth = client.getViewportWidth(); j.viewHeight = client.getViewportHeight();
+        }
+        return j;
+    }
+
+    /**
+     * The heavy part of model, on any thread: the job's new trace, the region its outline paints, its clickbox. It reads
+     * and writes only the job and its projection (fields the other kind of job leaves alone), not the client or renderer.
+     */
+    private static void compute(Job j, Silhouette.Scratch scratch)
+    {
+        Projection projected = j.p;
+        if (j.box) { j.polygons = clickbox(projected, j.viewX, j.viewWidth, j.viewHeight); }
+        if (!j.t.outline || j.asHull) { return; }
+        long start = System.nanoTime();
+        if (j.trace)
+        {
+            // An actor's faces turned away from the camera are not drawn, so not outlined (Silhouette.frontOnly).
+            boolean[] skip = j.t.actor == null ? projected.hidden : Silhouette.frontOnly(projected.x, projected.y, projected.a,
+                projected.b, projected.c, projected.faces, projected.hidden, scratch);
+            projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b, projected.c,
+                projected.faces, skip, scratch);
+        }
+        // The region outside the silhouette within the border's width of it (see OutlinePaint), made again only
+        // when the silhouette or the width changed.
+        float w = j.width;
+        if (j.t.borderWidth > 0 && (projected.paintLoops != projected.loops || projected.paintWidth != w))
+        {
+            if (j.stale && projected.tracedPaint != null && projected.tracedPaintWidth == w)
+            {
+                // Over the budget the region of the last trace is moved too, as its loops: making it again costs as
+                // much as tracing.
+                float[] xy = moved(Collections.singletonList(projected.tracedPaint.xy), projected.tracedCenterX, projected.tracedCenterY,
+                    projected.tracedWidth, projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d).get(0);
+                projected.paint = new OutlinePaint.Mesh(xy, projected.tracedPaint.tris);
+            }
             else
             {
-                asHull = !faces(t, projected);
-                if (!asHull)
-                {
-                    long start = System.nanoTime();
-                    projected.loops = projected.traced = Silhouette.trace(projected.x, projected.y, projected.a, projected.b,
-                        projected.c, projected.faces, projected.hidden, silhouetteScratch);
-                    projected.tracedFrame = frame;
-                    projected.loopsStale = false;
-                    projected.tracedCenterX = projected.centerX; projected.tracedCenterY = projected.centerY;
-                    projected.tracedWidth = projected.width; projected.tracedHeight = projected.height2d;
-                    outlineNanos += System.nanoTime() - start;
-                }
+                projected.paint = projected.loops == null ? null : paint(projected.loops, w);
+                if (projected.loops != null && projected.loops == projected.traced) { projected.tracedPaint = projected.paint; projected.tracedPaintWidth = w; }
             }
+            projected.paintLoops = projected.loops;
+            projected.paintWidth = w;
         }
-        if (t.outline && !asHull)
+        j.paint = projected.paint;
+        if (j.trace) { projected.traceNanos = System.nanoTime() - start; }
+    }
+
+    /** The client thread's part of model after compute: the target's shape put into the scene. */
+    private boolean finish(Job j)
+    {
+        ModelTarget t = j.t;
+        Projection projected = j.p;
+        layer = t.outline ? OUTLINE_LAYER : t.clickbox ? CLICKBOX_LAYER : HULL_LAYER;
+        boat = j.boat; boatAnchor = j.boatAnchor; boatLevel = j.boatLevel;
+        LocalPoint location = j.location;
+        int level = j.level;
+        float depth = projected.depth;
+        if (t.outline && !j.asHull)
         {
-            // The region outside the silhouette within the border's width of it (see OutlinePaint), made again only
-            // when the silhouette or the width changed; its time counts towards the outline budget.
-            float w = width(t.borderWidth);
-            if (t.borderWidth > 0 && (projected.paintLoops != projected.loops || projected.paintWidth != w))
-            {
-                long start = System.nanoTime();
-                if (stale && projected.tracedPaint != null && projected.tracedPaintWidth == w)
-                {
-                    // Over the budget the region of the last trace is moved too, as its loops: making it again costs as
-                    // much as tracing.
-                    float[] xy = moved(Collections.singletonList(projected.tracedPaint.xy), projected.tracedCenterX, projected.tracedCenterY,
-                        projected.tracedWidth, projected.tracedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d).get(0);
-                    projected.paint = new OutlinePaint.Mesh(xy, projected.tracedPaint.tris);
-                }
-                else
-                {
-                    projected.paint = projected.loops == null ? null : paint(projected.loops, w);
-                    if (projected.loops != null && projected.loops == projected.traced) { projected.tracedPaint = projected.paint; projected.tracedPaintWidth = w; }
-                }
-                projected.paintLoops = projected.loops;
-                projected.paintWidth = w;
-                outlineNanos += System.nanoTime() - start;
-            }
-            boolean any = projected.paint != null && t.borderWidth > 0 && outline.buildMesh(projected.paint.xy, projected.paint.tris, depth)
+            boolean any = j.paint != null && t.borderWidth > 0 && outline.buildMesh(j.paint.xy, j.paint.tris, depth)
                 && !offscreen() && draw(t.key, location, level, t.color, Marker.NO_FILL, true);
             // Close to the camera the faces left out can leave nothing to trace: then no shape this frame rather than
             // RuneLite's 2D one, which flickered in and out as the camera moved.
@@ -670,7 +844,7 @@ final class SceneShapeRenderer
             // every face's rectangle to whole pixels, so its edge wobbled as the camera moved. Kept for static objects
             // while the camera stands still. Only when it cannot be made (off screen, behind the camera) RuneLite's own
             // is drawn.
-            List<float[]> polygons = twoModels(t.object) ? null : clickbox(t, projected);
+            List<float[]> polygons = j.polygons;
             if (polygons == null)
             {
                 Shape shape = t.shape();
@@ -684,7 +858,7 @@ final class SceneShapeRenderer
             {
                 boolean hole = polygons.size() > 1 && Math.signum(FloatClickbox.area(full)) != outer;
                 int h = load(fit(full), depth);
-                if (outline.buildPolygon(px, py, pd, h, width(t.borderWidth), false) && !offscreen())
+                if (outline.buildPolygon(px, py, pd, h, j.width, false) && !offscreen())
                 {
                     draw(t.key, location, level, t.color, hole ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
                     any = true;
@@ -698,9 +872,9 @@ final class SceneShapeRenderer
         float cx = 0, cy = 0;
         for (int i = 0; i < h; i++) { cx += px[i]; cy += py[i]; }
         // Just in front of the nearest vertex, so the shape covers the model like the 2D overlay does.
-        if (!outline.build(px, py, pd, h, cx / h, cy / h, depth, width(t.borderWidth))) { return false; }
+        if (!outline.build(px, py, pd, h, cx / h, cy / h, depth, j.width)) { return false; }
         if (offscreen()) { return culled(t.key); }
-        return draw(t.key, location, level, t.color, asHull ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
+        return draw(t.key, location, level, t.color, j.asHull ? Marker.NO_FILL : t.fill, t.borderWidth > 0);
     }
 
     /**
@@ -838,8 +1012,8 @@ final class SceneShapeRenderer
     }
 
     /**
-     * Face topology for outlines, copied once per projection. NPCs copy it when projected; a static
-     * object's hull projection gets it here when its outline follows.
+     * Face topology for outlines and clickboxes, copied once per projection on the client thread. NPCs copy it when
+     * projected; a static object's hull projection gets it here when its outline or clickbox follows.
      */
     private boolean faces(ModelTarget t, Projection p)
     {
@@ -1080,17 +1254,15 @@ final class SceneShapeRenderer
 
     /**
      * The clickbox polygons from the projection: the bounding box hull for bounding-box models, else RuneLite's union of
-     * face rectangles clipped to it (FloatClickbox). Null without face topology.
+     * face rectangles clipped to it (FloatClickbox). Null without face topology (copied by prepare, see faces).
      */
-    private List<float[]> clickbox(ModelTarget t, Projection p)
+    private static List<float[]> clickbox(Projection p, int vx, int width, int height)
     {
         if (p.clickbox != null) { return p.clickbox; }
         if (p.boundingBox) { return p.boundsHull == null ? null : (p.clickbox = Collections.singletonList(p.boundsHull)); }
-        if (!faces(t, p)) { return null; }
-        int vx = client.getViewportXOffset();
+        if (p.faces <= 0) { return null; }
         // As calculate2DBounds, which takes the viewport's x offset for its top edge too.
-        return p.clickbox = FloatClickbox.of(p.x, p.y, p.a, p.b, p.c, p.faces, p.hidden, p.boundsHull,
-            vx, vx, vx + client.getViewportWidth(), vx + client.getViewportHeight());
+        return p.clickbox = FloatClickbox.of(p.x, p.y, p.a, p.b, p.c, p.faces, p.hidden, p.boundsHull, vx, vx, vx + width, vx + height);
     }
 
     /**
@@ -1632,12 +1804,33 @@ final class SceneShapeRenderer
         buckets.clear();
         stages.clear();
         silhouetteScratch.bits = new long[0];
+        Arrays.fill(workerScratch, null);
         projections.clear();
         appended.clear();
     }
 
     /** As clear, and the models are dropped too. */
     void reset() { clear(); spareCarriers.clear(); carriers.reset(); }
+
+    /** Starts the workers (see models), with the plugin. */
+    void startWorkers() { startWorkers(WORKERS); }
+
+    /** Starts this many workers, on the client thread or with the plugin; with none the client thread does all. */
+    void startWorkers(int count)
+    {
+        stopWorkers();
+        workerCount = Math.max(0, Math.min(MAX_WORKERS, count));
+        if (workerCount == 0) { return; }
+        workers = Executors.newFixedThreadPool(workerCount, new ThreadFactoryBuilder().setNameFormat("hd-world-markers-%d").setDaemon(true).build());
+    }
+
+    /** Stops the workers, with the plugin: a frame computing finishes on the client thread (see computeAll). */
+    void stopWorkers()
+    {
+        ExecutorService pool = workers;
+        workers = null;
+        if (pool != null) { pool.shutdownNow(); }
+    }
 
     /** Shapes of one tile and level in world points with their layer, and faces with colour and alpha. */
     private static class Geometry

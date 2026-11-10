@@ -127,6 +127,7 @@ public class HdWorldMarkersPlugin extends Plugin
         // The shadow transparency notice shows again after turning the plugin on (or installing it).
         warnedShadowTransparency = false;
         overlays.add(overlay);
+        renderer.startWorkers(config.outlineThreads());
         paths.startUp();
         marking.startUp();
         for (Object o : subscribers()) { eventBus.register(o); }
@@ -136,6 +137,7 @@ public class HdWorldMarkersPlugin extends Plugin
     {
         running = false;
         overlays.remove(overlay);
+        renderer.stopWorkers();
         for (Object o : subscribers()) { eventBus.unregister(o); }
         marking.shutDown();
         paths.shutDown();
@@ -245,9 +247,10 @@ public class HdWorldMarkersPlugin extends Plugin
                 SceneText.Style style = textStyle();
                 for (Marker m : sceneMarkers) { if (m.label != null && !m.label.isEmpty()) { renderer.label(m, style); } }
             }
-            for (int i = 0; i < Math.min(MAX_MODELS, modelTargets.size()); i++) { renderer.model(modelTargets.get(i)); }
+            List<ModelTarget> models = new ArrayList<>(modelTargets.subList(0, Math.min(MAX_MODELS, modelTargets.size())));
             // Outlines of things on a boat, carried into the main world as its tiles are.
-            for (ModelTarget t : sources.outlinesElsewhere()) { renderer.model(t); }
+            models.addAll(sources.outlinesElsewhere());
+            renderer.models(models);
             boolean ok = renderer.end();
             sceneUnavailable = !ok;
             // A minute without failing: the next failure rests the shortest time again.
@@ -489,6 +492,7 @@ public class HdWorldMarkersPlugin extends Plugin
         // another try after a failure.
         failedUntil = 0;
         if (key.startsWith("text")) { textStyle = null; }
+        if (key.equals("outlineThreads")) { clientThread.invoke(() -> { if (running) { renderer.startWorkers(config.outlineThreads()); } }); }
         if (key.startsWith(MarkerSources.TILES) || key.startsWith(MarkerSources.LINES) || key.startsWith(ObjectMarkerSource.KEY) || key.equals("tilePacks")) { marksChanged = true; }
         else if (MarkerSources.npcKey(key)) { npcsChanged = true; }
     }

@@ -12,6 +12,8 @@
 - On a boat (Sailing), tiles, text and outlines are drawn in the game world as on land: sharp, with the border width you set, instead of thick 2D lines.
 - In the Gauntlet, paths no longer lead through rooms you have not opened yet.
 - With a plugin that changes poses at draw time (such as Keyframe Smoothing), the cut around a character follows the pose on screen.
+- NPC outlines follow what the game draws: parts it does not draw from behind (one-sided capes, wings, flat models) are no longer outlined. Faster too.
+- Outlines and clickboxes are worked out on several CPU threads at once (General > Outline threads), and an outline's border much faster.
 - Right-click options start with **HD**.
 - More highlight options for plugin developers.
 - Faster, less code.

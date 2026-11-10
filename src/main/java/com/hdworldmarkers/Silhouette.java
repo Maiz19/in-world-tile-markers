@@ -47,6 +47,32 @@ final class Silhouette
         int[] gapLine = new int[64];
         float[] gapLo = new float[64], gapHi = new float[64];
         int gapCount;
+        /** Per span kept by extend, its place in cells of the cell before and after it (-1: no edge there). */
+        int[] gapBefore = new int[0], gapAfter = new int[0];
+        /** Per face whether it is left out of an actor's silhouette (see frontOnly). */
+        boolean[] skip = new boolean[0];
+    }
+
+    /**
+     * Whether the game draws a face, by its corners on the canvas: the client's own test (its software renderer's, in
+     * floats), and the faces the GPU renderers keep (RuneLite's GPU plugin and 117 HD cull the others). A face turned
+     * away from the camera, edge-on or not projected (NaN) is not drawn.
+     */
+    static boolean front(float[] x, float[] y, int a, int b, int c)
+    {
+        return (x[a] - x[b]) * (y[c] - y[b]) - (y[a] - y[b]) * (x[c] - x[b]) > 0;
+    }
+
+    /**
+     * The faces to leave out of an actor's silhouette (trace's hidden): the hidden ones and those not drawn (see front),
+     * as every renderer draws an actor from the front only. That is the outline of what is seen, and the half turned away
+     * is not traced. Not for objects: 117 HD draws some of their faces from both sides (leaves, roofs). Kept in scratch.
+     */
+    static boolean[] frontOnly(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch)
+    {
+        if (scratch.skip.length < faces) { scratch.skip = new boolean[faces + faces / 2]; }
+        for (int f = 0; f < faces; f++) { scratch.skip[f] = hidden != null && hidden[f] || !front(x, y, a[f], b[f], c[f]); }
+        return scratch.skip;
     }
 
     /**
@@ -290,20 +316,34 @@ final class Silhouette
      */
     private static void extend(Scratch scratch, int w)
     {
+        // Only the spans beside a cell with an edge can do anything, in every pass: the others (most, inside the model)
+        // are dropped first, and the two cells of each kept one looked up once.
+        int n = 0;
+        if (scratch.gapBefore.length < scratch.gapCount) { scratch.gapBefore = new int[scratch.gapLine.length]; scratch.gapAfter = new int[scratch.gapLine.length]; }
+        for (int g = 0; g < scratch.gapCount; g++)
+        {
+            int line = scratch.gapLine[g];
+            // The centres it lies between: before (on its low side) and after.
+            int before = (int) Math.floor(scratch.gapHi[g] - 0.5f), after = before + 1;
+            boolean row = line >= 0;
+            int b = find(scratch, row ? line * w + before : before * w + (-1 - line)), a = find(scratch, row ? line * w + after : after * w + (-1 - line));
+            if (b < 0 && a < 0) { continue; }
+            scratch.gapLine[n] = line; scratch.gapLo[n] = scratch.gapLo[g]; scratch.gapHi[n] = scratch.gapHi[g];
+            scratch.gapBefore[n] = b; scratch.gapAfter[n] = a;
+            n++;
+        }
+        scratch.gapCount = n;
         for (int pass = 0; pass < 4; pass++)
         {
             boolean changed = false;
-            for (int g = 0; g < scratch.gapCount; g++)
+            for (int g = 0; g < n; g++)
             {
-                int line = scratch.gapLine[g];
                 float lo = scratch.gapLo[g], hi = scratch.gapHi[g];
-                // The centres it lies between: before (on its low side) and after.
-                int before = (int) Math.floor(hi - 0.5f), after = before + 1;
-                boolean row = line >= 0;
-                int i = find(scratch, row ? line * w + before : before * w + (-1 - line));
+                boolean row = scratch.gapLine[g] >= 0;
+                int i = scratch.gapBefore[g];
                 float[] high = row ? scratch.east : scratch.bottom, low = row ? scratch.west : scratch.top;
                 if (i >= 0 && !Float.isNaN(high[i]) && lo <= high[i] + TOUCH && hi > high[i]) { high[i] = hi; changed = true; }
-                i = find(scratch, row ? line * w + after : after * w + (-1 - line));
+                i = scratch.gapAfter[g];
                 if (i >= 0 && !Float.isNaN(low[i]) && hi >= low[i] - TOUCH && lo < low[i]) { low[i] = lo; changed = true; }
             }
             if (!changed) { return; }
@@ -445,19 +485,45 @@ final class Silhouette
     private static void fill(long[] grid, int words, int w, int h, float x0, float y0, float x1, float y1, float x2, float y2, Scratch scratch,
         boolean exact)
     {
-        float[] xs = scratch.intersections;
+        // No row centre is crossed twice with a corner that is no number.
+        if (y0 != y0 || y1 != y1 || y2 != y2) { return; }
         int top = Math.max(0, (int) Math.floor(Math.min(y0, Math.min(y1, y2)) - 0.5f));
         int bottom = Math.min(h - 1, (int) Math.ceil(Math.max(y0, Math.max(y1, y2)) - 0.5f));
+        // The rows whose centre each edge crosses (from, up to): two edges at every row of the triangle, one of them the
+        // edge that spans them all. Found per triangle, not per row.
+        int s0 = (int) Math.ceil(Math.min(y0, y1) - 0.5f), e0 = (int) Math.ceil(Math.max(y0, y1) - 0.5f);
+        int s1 = (int) Math.ceil(Math.min(y1, y2) - 0.5f), e1 = (int) Math.ceil(Math.max(y1, y2) - 0.5f);
+        int s2 = (int) Math.ceil(Math.min(y2, y0) - 0.5f), e2 = (int) Math.ceil(Math.max(y2, y0) - 0.5f);
+        int first = Math.min(s0, Math.min(s1, s2)), end = Math.max(e0, Math.max(e1, e2));
+        // The long edge (l) and the two others (a, then b from row turn on), each from its own first corner as given.
+        float lxa, lya, lxb, lyb, axa, aya, axb, ayb, bxa, bya, bxb, byb;
+        int turn;
+        if (s0 == first && e0 == end)
+        {
+            lxa = x0; lya = y0; lxb = x1; lyb = y1;
+            if (s1 == first) { axa = x1; aya = y1; axb = x2; ayb = y2; bxa = x2; bya = y2; bxb = x0; byb = y0; turn = e1; }
+            else { axa = x2; aya = y2; axb = x0; ayb = y0; bxa = x1; bya = y1; bxb = x2; byb = y2; turn = e2; }
+        }
+        else if (s1 == first && e1 == end)
+        {
+            lxa = x1; lya = y1; lxb = x2; lyb = y2;
+            if (s2 == first) { axa = x2; aya = y2; axb = x0; ayb = y0; bxa = x0; bya = y0; bxb = x1; byb = y1; turn = e2; }
+            else { axa = x0; aya = y0; axb = x1; ayb = y1; bxa = x2; bya = y2; bxb = x0; byb = y0; turn = e0; }
+        }
+        else
+        {
+            lxa = x2; lya = y2; lxb = x0; lyb = y0;
+            if (s0 == first) { axa = x0; aya = y0; axb = x1; ayb = y1; bxa = x1; bya = y1; bxb = x2; byb = y2; turn = e0; }
+            else { axa = x1; aya = y1; axb = x2; ayb = y2; bxa = x0; bya = y0; bxb = x1; byb = y1; turn = e1; }
+        }
+        top = Math.max(top, first);
+        bottom = Math.min(bottom, end - 1);
         for (int row = top; row <= bottom; row++)
         {
             float sy = row + 0.5f;
-            int k = 0;
-            k = cross(x0, y0, x1, y1, sy, xs, k);
-            k = cross(x1, y1, x2, y2, sy, xs, k);
-            k = cross(x2, y2, x0, y0, sy, xs, k);
-            if (k < 2) { continue; }
-            float left = Math.min(xs[0], xs[1]), right = Math.max(xs[0], xs[1]);
-            if (k == 3) { left = Math.min(left, xs[2]); right = Math.max(right, xs[2]); }
+            float xl = lxa + (sy - lya) / (lyb - lya) * (lxb - lxa);
+            float xo = row < turn ? axa + (sy - aya) / (ayb - aya) * (axb - axa) : bxa + (sy - bya) / (byb - bya) * (bxb - bxa);
+            float left = Math.min(xl, xo), right = Math.max(xl, xo);
             int from = Math.max(0, (int) Math.ceil(left - 0.5f)), to = Math.min(w - 1, (int) Math.floor(right - 0.5f));
             if (from <= to)
             {
