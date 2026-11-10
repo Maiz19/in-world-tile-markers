@@ -368,17 +368,17 @@ class RouteFinder
         return turns;
     }
 
-    /** Whether the target can be used from p at a distance: not on it, within its range, with a line of sight. */
+    /**
+     * Whether the target can be used from p at a distance: not on it, within its range, with a line of sight to its tile
+     * nearest to p. The game draws that one line: a large character whose nearest tile is out of sight is out of
+     * sight, also where other tiles of it are in sight.
+     */
     private boolean inRange(WorldPoint p, Target t)
     {
         int dx = Math.max(t.x - p.getX(), p.getX() - t.x - t.width + 1), dy = Math.max(t.y - p.getY(), p.getY() - t.y - t.height + 1);
         if (dx <= 0 && dy <= 0 || Math.max(dx, dy) > t.range) { return false; }
-        int x = p.getX() - baseX, y = p.getY() - baseY;
-        for (int i = 0; i < t.width; i++)
-        {
-            for (int j = 0; j < t.height; j++) { if (sight(x, y, t.x - baseX + i, t.y - baseY + j)) { return true; } }
-        }
-        return false;
+        int nearX = Math.max(t.x, Math.min(t.x + t.width - 1, p.getX())), nearY = Math.max(t.y, Math.min(t.y + t.height - 1, p.getY()));
+        return sight(p.getX() - baseX, p.getY() - baseY, nearX - baseX, nearY - baseY);
     }
 
     /**

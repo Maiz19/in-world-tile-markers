@@ -134,12 +134,14 @@ final class PathTracker extends Overlay implements KeyListener
         Target target;
         WorldPoint from;
         List<WorldPoint> turns = Collections.emptyList();
+        /** The whole route to the target, before it was cut where the target comes in range (Target.range). */
+        List<WorldPoint> route;
         boolean running;
         final List<WorldPoint> main = new ArrayList<>(), passed = new ArrayList<>();
 
         void clear()
         {
-            target = null; from = null; turns = Collections.emptyList();
+            target = null; from = null; turns = Collections.emptyList(); route = null;
             main.clear(); passed.clear();
         }
     }
@@ -372,10 +374,12 @@ final class PathTracker extends Overlay implements KeyListener
     private boolean start(Target t, boolean running)
     {
         WorldPoint from = client.getLocalPlayer().getWorldLocation();
-        List<WorldPoint> turns = t == null ? null : routes.approach(from, t, routes.find(from, t), running);
+        List<WorldPoint> route = t == null ? null : routes.find(from, t);
+        List<WorldPoint> turns = t == null ? null : routes.approach(from, t, route, running);
         if (turns == null) { return false; }
         activePath.target = t;
         activePath.turns = turns;
+        activePath.route = route;
         activePath.running = running;
         approaching = t.fromAfar();
         approachEnd = turns.isEmpty() ? null : last(turns);
@@ -389,6 +393,7 @@ final class PathTracker extends Overlay implements KeyListener
     /** Each game tick: the active path against where you are; it ends, or is found again where you left it or its target moved. */
     private void follow(WorldPoint now)
     {
+        if (activePath.target.fromAfar() && activePath.target.actor != null) { followCharacter(now); return; }
         // The server walks you elsewhere than this route ends: to its flag then. Its flag lies beyond where a walk to a
         // target used from a distance stops.
         LocalPoint destination = activePath.target.fromAfar() ? null : serverDestination();
@@ -420,6 +425,36 @@ final class PathTracker extends Overlay implements KeyListener
         }
     }
 
+    /**
+     * Each game tick toward a character used from a distance. The game walks you along its route to it, found again
+     * only on the last stretch (as to any character), and checks your range against where the character stands now
+     * (characters move first). So the route stays, cut again where you come in range of the character now.
+     */
+    private void followCharacter(WorldPoint now)
+    {
+        Path p = activePath;
+        if (now.distanceTo(lastTile) > 2 || p.route == null) { p.clear(); return; }
+        Target t = Target.of(p.target.actor).reaching(p.target);
+        p.target = t;
+        // Where the route puts you now: a step on from your last tile walking, two running; turns reached are dropped.
+        List<WorldPoint> route = new ArrayList<>(p.route);
+        WorldPoint at = lastTile;
+        for (int steps = 0; steps < (p.running ? 2 : 1) && !route.isEmpty(); steps++)
+        {
+            WorldPoint next = routes.step(at, route.get(0));
+            at = next == null ? at : next;
+            if (at.equals(route.get(0))) { route.remove(0); }
+        }
+        // Elsewhere (the walk began a tick later, or went another way), or on the last stretch: found from where you are.
+        if (!at.equals(now) || route.size() < 2) { route = routes.find(now, t); }
+        List<WorldPoint> turns = route == null ? null : routes.approach(now, t, route, p.running);
+        // In range now (the game shoots from here), or no way to it.
+        if (turns == null || turns.isEmpty()) { p.clear(); return; }
+        p.route = route;
+        p.turns = turns;
+        approachEnd = last(turns);
+    }
+
     /** The client's destination once the server sets it; null while it is the client's own flag of the last click. */
     private LocalPoint serverDestination()
     {
@@ -429,9 +464,10 @@ final class PathTracker extends Overlay implements KeyListener
 
     private void reroute(Target t, WorldPoint from)
     {
-        List<WorldPoint> turns = routes.approach(from, t, routes.find(from, t), activePath.running);
+        List<WorldPoint> route = routes.find(from, t), turns = routes.approach(from, t, route, activePath.running);
         if (turns == null) { return; }
         activePath.turns = turns;
+        activePath.route = route;
         fresh = false;
         if (approaching) { approachEnd = turns.isEmpty() ? null : last(turns); }
     }

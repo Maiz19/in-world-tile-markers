@@ -11,6 +11,7 @@
 - Attack paths stop where your weapon reaches: halberds 2 tiles, salamanders diagonally too, ranged weapons and powered staves their own range (2 more on longrange, up to 10), spells 10. Telekinetic Grab no longer walks to the item.
 - On a boat (Sailing), tiles, text and outlines are drawn in the game world as on land: sharp, with the border width you set, instead of thick 2D lines.
 - In the Gauntlet, paths no longer lead through rooms you have not opened yet.
+- Attack paths from a distance follow the target as it moves, and around corners stop where the game does.
 - With a plugin that changes poses at draw time (such as Keyframe Smoothing), the cut around a character follows the pose on screen.
 - NPC outlines follow what the game draws: parts it does not draw from behind (one-sided capes, wings, flat models) are no longer outlined. Faster too.
 - Outlines and clickboxes are worked out on several CPU threads at once (General > Outline threads), and an outline's border much faster.
