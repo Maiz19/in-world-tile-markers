@@ -2,22 +2,16 @@
 
 ## 1.5.0
 
-- **Interact highlight** (new, off by default): highlights what the mouse is on and what you interact with, as an outline, hull, clickbox or tile.
-- **Text**: choose the font, size and edge, and render text in HD so it stays sharp in stretched mode.
-- **Paths**: the active path no longer disappears while the destination tile still shows. Predicted walks in extended chunks avoid water and fences.
-- **Hover path**: *Show on minimap* is gone. *Display* and *Draw location(s)* now decide where it shows.
-- **Outlines** no longer flicker. Hulls and outlines sit right on docks and decks.
-- Through walls and Player in front of marks now work as the game draws things. Object marks show through walls too; you hide one only when you stand in front of it.
-- Attack paths stop where your weapon reaches: halberds 2 tiles, salamanders diagonally too, ranged weapons and powered staves their own range (2 more on longrange, up to 10), spells 10. Telekinetic Grab no longer walks to the item.
-- On a boat (Sailing), tiles, text and outlines are drawn in the game world as on land: sharp, with the border width you set, instead of thick 2D lines.
-- In the Gauntlet, paths no longer lead through rooms you have not opened yet.
-- Attack paths from a distance follow the target as it moves, and around corners stop where the game does.
-- With a plugin that changes poses at draw time (such as Keyframe Smoothing), the cut around a character follows the pose on screen.
-- NPC outlines follow what the game draws: parts it does not draw from behind (one-sided capes, wings, flat models) are no longer outlined. Faster too.
-- Outlines and clickboxes are worked out on several CPU threads at once (General > Outline threads), and an outline's border much faster.
-- Right-click options start with **HD**.
-- More highlight options for plugin developers.
-- Faster, less code.
+- **Interact highlight** (new, off by default): outlines, hulls, clickboxes or tiles on what you hover and interact with.
+- **Text**: pick font, size and edge; HD text stays sharp in stretched mode.
+- **Paths**: the active path stays while the destination tile shows; predicted walks avoid water and fences; Gauntlet paths skip unopened rooms.
+- **Attack paths** stop at your weapon's reach, follow a moving target and no longer jump when you eat, pray or switch. Telekinetic Grab no longer walks to the item.
+- **Hover path**: *Show on minimap* is gone; *Display* and *Draw location(s)* decide where it shows.
+- **Outlines** no longer flicker, sit right on docks and decks, and only cover what the game draws.
+- **Through walls** works as the game draws things, object marks too.
+- **Sailing**: marks on a boat are drawn sharp in the world.
+- **Faster**: outlines on several CPU threads (General > Outline threads), and less work zoomed in.
+- Right-click options start with **HD**. More options for plugin developers.
 
 ## 1.3.1
 

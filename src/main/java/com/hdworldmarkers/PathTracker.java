@@ -247,6 +247,10 @@ final class PathTracker extends Overlay implements KeyListener
      */
     @Subscribe public void onMenuOptionClicked(MenuOptionClicked e)
     {
+        // An option that never walks (an item, a prayer, Examine) leaves the walk you are on alone: no frame before the
+        // next client tick shows the client's flag instead, which lies beside a character attacked from a distance.
+        MenuAction type = e.getMenuEntry().getType();
+        if (NOT_WALKING.contains(type) || NOT_LEFT_CLICK.contains(type)) { return; }
         click = new Click(e.getMenuEntry());
         approaching = false;
         clickRouted = false;
@@ -263,7 +267,7 @@ final class PathTracker extends Overlay implements KeyListener
     private void route(Click c, Tile hovered)
     {
         clickRouted = start(target(c.type, c.x, c.y, c.id, c.actor, c.option, clickInMenu ? clickTile : hovered, null), clickRunning);
-        toDestination = !clickRouted && !NOT_WALKING.contains(c.type) && !NOT_LEFT_CLICK.contains(c.type);
+        toDestination = !clickRouted;
         watching = OBJECT_OPTIONS.contains(c.type) ? 60 : 0;
         c.routed = true;
     }
@@ -393,6 +397,21 @@ final class PathTracker extends Overlay implements KeyListener
     /** Each game tick: the active path against where you are; it ends, or is found again where you left it or its target moved. */
     private void follow(WorldPoint now)
     {
+        // An attack reaches as far as the weapon worn now (the game checks it each tick): a weapon switched on the way
+        // finds the walk again from where you are, to where the new weapon reaches.
+        Target was = activePath.target;
+        if (was.attack && was.actor != null)
+        {
+            Target t = Target.of(was.actor);
+            attack(t);
+            if (t.range != was.range || t.bySight != was.bySight)
+            {
+                activePath.target = t;
+                approaching = t.fromAfar();
+                reroute(t, now);
+                return;
+            }
+        }
         if (activePath.target.fromAfar() && activePath.target.actor != null) { followCharacter(now); return; }
         // The server walks you elsewhere than this route ends: to its flag then. Its flag lies beyond where a walk to a
         // target used from a distance stops.
@@ -558,18 +577,24 @@ final class PathTracker extends Overlay implements KeyListener
     /** The weapon param holding its attack range; 0 for weapons used from beside the target. */
     private static final int ATTACK_RANGE = 13;
 
-    /**
-     * How far an option on a character reaches: a spell cast on it, or an attack while autocasting, SPELL_RANGE; an
-     * attack as far as the weapon worn reaches (a halberd 2, a salamander 1 by sight, so diagonally too, a ranged
-     * weapon or powered staff further, on longrange 2 more); else as far as the character is used from.
-     */
+    /** How far an option on a character reaches: a spell cast on it SPELL_RANGE, an attack see attack; else as far as the character is used from. */
     private void reach(Target t, String option)
     {
         String o = option == null ? "" : Text.removeTags(option);
+        if ("Cast".equals(o)) { t.range = SPELL_RANGE; }
+        else if ("Attack".equals(o)) { attack(t); }
+    }
+
+    /**
+     * An attack reaches as far as the weapon worn now: while autocasting SPELL_RANGE; a halberd 2, a salamander 1 by
+     * sight, so diagonally too, a ranged weapon or powered staff further, on longrange 2 more.
+     */
+    private void attack(Target t)
+    {
+        t.attack = true;
         int mode = client.getVarpValue(VarPlayerID.COM_MODE);
         // Style 4 is autocasting (5 its defensive form, kept in another varbit).
-        if ("Cast".equals(o) || "Attack".equals(o) && mode == 4) { t.range = SPELL_RANGE; return; }
-        if (!"Attack".equals(o)) { return; }
+        if (mode == 4) { t.range = SPELL_RANGE; return; }
         ItemContainer worn = client.getItemContainer(net.runelite.api.gameval.InventoryID.WORN);
         Item weapon = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
         int id = weapon == null ? -1 : weapon.getId();

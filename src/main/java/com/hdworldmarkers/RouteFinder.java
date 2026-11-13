@@ -531,6 +531,8 @@ class RouteFinder
         int range = 1;
         /** Used by a line of sight at range 1 too, so also from diagonally beside it (a salamander). */
         boolean bySight;
+        /** An attack: it reaches as far as the weapon worn, which a switch on the way changes. */
+        boolean attack;
 
         /** Whether it is used from a distance, by a line of sight. */
         boolean fromAfar() { return range > 1 || bySight; }
@@ -540,6 +542,7 @@ class RouteFinder
         {
             range = other.range;
             bySight = other.bySight;
+            attack = other.attack;
             return this;
         }
 
