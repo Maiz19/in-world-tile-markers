@@ -12,12 +12,12 @@ final class Chat
 {
     private Chat() { }
 
-    /** A console line; named, with "HD World Markers: " highlighted in front. */
+    /** A console line; named, with "HD World Markers: " highlighted in front. The text is escaped: it may hold a name from the game. */
     static void send(ChatMessageManager chat, String text, boolean named)
     {
-        String message = !named ? text : new ChatMessageBuilder().append(ChatColorType.HIGHLIGHT).append("HD World Markers: ")
-            .append(ChatColorType.NORMAL).append(text).build();
-        chat.queue(QueuedMessage.builder().type(ChatMessageType.CONSOLE).runeLiteFormattedMessage(message).build());
+        ChatMessageBuilder message = new ChatMessageBuilder();
+        if (named) { message.append(ChatColorType.HIGHLIGHT).append("HD World Markers: ").append(ChatColorType.NORMAL); }
+        chat.queue(QueuedMessage.builder().type(ChatMessageType.CONSOLE).runeLiteFormattedMessage(message.append(text).build()).build());
     }
 
     /** "a", "a and b", "a, b and c". */

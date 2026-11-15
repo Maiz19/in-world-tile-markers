@@ -1225,7 +1225,7 @@ final class Marking
         List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
         for (ObjectMarkerSource.ObjectPoint p : points)
         {
-            if (matches(p, object, name, point))
+            if (matches(p, name, point))
             {
                 change.accept(p);
                 saveObjects(region, points);
@@ -1234,11 +1234,10 @@ final class Marking
         }
     }
 
-    /** The same object, or a multiloc marked under another name, or another id spawned with the same name. */
-    private static boolean matches(ObjectMarkerSource.ObjectPoint p, TileObject object, String name, WorldPoint point)
+    /** The mark of the object of this name on this tile: a mark is a name and a place, not an object id. */
+    private static boolean matches(ObjectMarkerSource.ObjectPoint p, String name, WorldPoint point)
     {
-        return (p.id == object.getId() || p.name.equals(name))
-            && p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane();
+        return p.name.equals(name) && p.regionX == point.getRegionX() && p.regionY == point.getRegionY() && p.z == point.getPlane();
     }
 
     /** The object as it is seen now: a multiloc's current form. */
@@ -1252,7 +1251,7 @@ final class Marking
     {
         TileObject object = targets.object(entry);
         if (object == null) { return; }
-        // The object's id is its base id; the composition is the object as it is seen now.
+        // The composition is the object as it is seen now: a multiloc is marked under the name of the form it shows.
         ObjectComposition composition = composition(object);
         String name = composition == null ? null : composition.getName();
         // Objects without a name are ambiguous: not marked, as in Object Markers.
@@ -1261,8 +1260,8 @@ final class Marking
         WorldPoint point = WorldPoint.fromLocalInstance(client, object.getLocalLocation(), object.getPlane());
         int region = point.getRegionID();
         List<ObjectMarkerSource.ObjectPoint> points = objects.saved(region);
-        boolean removed = points.removeIf(p -> matches(p, object, name, point));
-        if (!removed) { points.add(new ObjectMarkerSource.ObjectPoint(object.getId(), name, point.getRegionX(), point.getRegionY(), point.getPlane())); }
+        boolean removed = points.removeIf(p -> matches(p, name, point));
+        if (!removed) { points.add(new ObjectMarkerSource.ObjectPoint(name, point.getRegionX(), point.getRegionY(), point.getPlane())); }
         saveObjects(region, points);
     }
 

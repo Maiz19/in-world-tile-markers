@@ -5,6 +5,7 @@
 - **Outline threads** (General): outlines and clickboxes are worked out on several CPU threads, and their borders much faster.
 - NPC outlines leave out what the game does not draw from behind (one-sided capes, wings).
 - Zoomed in with marks through walls, the cut around your character costs about half as much (frame drops with the destination tile).
+- Object marks are saved as a name and a place, no longer with the object's id (a Plugin Hub rule). Your marks stay; an object that changes form (a door) is marked per form.
 - Attack paths from a distance follow a moving target, stop where the game does around corners and after a weapon switch, and no longer jump when you eat, pray or switch.
 
 ## 1.5.0

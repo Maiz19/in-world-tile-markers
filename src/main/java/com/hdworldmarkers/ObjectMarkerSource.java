@@ -80,12 +80,11 @@ final class ObjectMarkerSource
     }
 
     /**
-     * A marked object as saved, in Object Markers' format: the object on this tile, its name, and its own colors and
-     * styles (null: the options').
+     * A marked object as saved: the object of this name on this tile, and its own colors and styles (null: the
+     * options'). Object Markers' format without its object id, which is neither read nor saved.
      */
     static final class ObjectPoint
     {
-        int id;
         String name;
         int regionX, regionY, z;
         @SerializedName("color")
@@ -93,12 +92,12 @@ final class ObjectMarkerSource
         Color fillColor;
         Boolean hull, outline, clickbox, tile;
 
-        ObjectPoint(int id, String name, int regionX, int regionY, int z)
+        ObjectPoint(String name, int regionX, int regionY, int z)
         {
-            this.id = id; this.name = name; this.regionX = regionX; this.regionY = regionY; this.z = z;
+            this.name = name; this.regionX = regionX; this.regionY = regionY; this.z = z;
         }
 
-        boolean same(ObjectPoint o) { return id == o.id && regionX == o.regionX && regionY == o.regionY && z == o.z; }
+        boolean same(ObjectPoint o) { return name.equals(o.name) && regionX == o.regionX && regionY == o.regionY && z == o.z; }
 
         /** Whether it has a color or style of its own. */
         boolean hasLook() { return borderColor != null || fillColor != null || hull != null || outline != null || clickbox != null || tile != null; }
@@ -116,7 +115,7 @@ final class ObjectMarkerSource
     /** A region's saved points, read now: what a change starts from. */
     List<ObjectPoint> saved(int region) { return parse(gson, configs.getConfiguration(HdWorldMarkersConfig.GROUP, KEY + region)); }
 
-    /** Marked objects in Object Markers' format (or this plugin's, its id, name and place); those without a name are left out. */
+    /** Marked objects in Object Markers' format (or this plugin's, its name and place); those without a name are left out. */
     static List<ObjectPoint> parse(Gson gson, String json)
     {
         List<ObjectPoint> list = new ArrayList<>();
@@ -139,7 +138,7 @@ final class ObjectMarkerSource
         for (int region : wv.getMapRegions()) { points(region); }
     }
 
-    /** As Object Markers' checkObjectPoints. */
+    /** As Object Markers' checkObjectPoints, but a mark is the object of its name on its tile, whatever its id. */
     void check(TileObject object)
     {
         // No saved points loaded (as during a scene load, before the rebuild): nothing to match.
@@ -149,31 +148,35 @@ final class ObjectMarkerSource
         if (regionPoints == null || regionPoints.isEmpty()) { return; }
         ObjectComposition composition = client.getObjectDefinition(object.getId());
         if (composition == null) { return; }
-        if (composition.getImpostorIds() == null)
-        {
-            // Multiloc names are instead checked when drawing.
-            String name = composition.getName();
-            if (Strings.isNullOrEmpty(name) || name.equals("null")) { return; }
-        }
+        // A multiloc's name is that of the form it shows, checked when drawing: it takes every mark on its tile.
+        boolean multiloc = composition.getImpostorIds() != null, found = false;
+        String name = composition.getName();
+        if (!multiloc && (Strings.isNullOrEmpty(name) || name.equals("null"))) { return; }
         for (ObjectPoint p : regionPoints)
         {
-            if (worldPoint.getRegionX() == p.regionX && worldPoint.getRegionY() == p.regionY
-                && worldPoint.getPlane() == p.z && p.id == object.getId())
-            {
-                remove(object);
-                objects.add(new Marked(object, composition, p));
-                break;
-            }
+            if (worldPoint.getRegionX() != p.regionX || worldPoint.getRegionY() != p.regionY || worldPoint.getPlane() != p.z
+                || !multiloc && !p.name.equals(name)) { continue; }
+            if (!found) { remove(object); found = true; }
+            objects.add(new Marked(object, composition, p));
+            if (!multiloc) { break; }
         }
     }
 
     void remove(TileObject object) { objects.removeIf(o -> o.object == object); }
 
-    /** The mark of this object as found in the scene, or null. */
+    /** The mark of this object as it shows now, or null: a multiloc in another form than the marked one has none. */
     Marked find(TileObject object)
     {
-        for (Marked m : objects) { if (m.object == object) { return m; } }
+        for (Marked m : objects) { if (m.object == object && shows(m)) { return m; } }
         return null;
+    }
+
+    /** Whether the object shows the form its mark names: a multiloc is only marked while the name still matches. */
+    private static boolean shows(Marked m)
+    {
+        if (m.composition.getImpostorIds() == null) { return true; }
+        ObjectComposition composition = m.composition.getImpostor();
+        return composition != null && !Strings.isNullOrEmpty(composition.getName()) && composition.getName().equals(m.name);
     }
 
     /** The colors in use in these regions' marks (up to five), for the color menus. */
@@ -210,14 +213,7 @@ final class ObjectMarkerSource
             if (wv == null || m.object.getPlane() != wv.getPlane()) { continue; }
             WorldEntity entity = top == null ? null : top.worldEntities().byIndex(wv.getId());
             if (entity != null && entity.isHiddenForOverlap()) { continue; }
-            ObjectComposition composition = m.composition;
-            if (composition.getImpostorIds() != null)
-            {
-                // A multiloc: only mark it while the name still matches.
-                composition = composition.getImpostor();
-                if (composition == null || Strings.isNullOrEmpty(composition.getName())
-                    || "null".equals(composition.getName()) || !composition.getName().equals(m.name)) { continue; }
-            }
+            if (!shows(m)) { continue; }
             Color border = m.borderColor != null ? m.borderColor : color;
             Color fill = m.fillColor != null ? m.fillColor : fillColor;
             // Without a fill the hull's is Object Markers' default (a=50); clickbox and tile use the border color at a/12.
