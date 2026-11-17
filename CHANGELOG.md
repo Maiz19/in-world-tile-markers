@@ -2,6 +2,9 @@
 
 ## 1.6.0
 
+- Other plugins can send **boards**: coloured rectangles and texts above a character or a point, such as a health bar with its numbers, drawn in the world on whole screen pixels and gliding between the character's steps (see the guide). A board's text can have a size and font of its own, and its opaque rectangles stay opaque under 117 HD and keep their colours there between sun and shade (exactly the colours sent with a 117 HD that draws them unlit).
+- A board can hang on the game's own overhead point of a character (`overhead`): it then moves exactly as the game's health bar and head icons do, and never slides against them. Its ground is the one the game takes under a character, the highest of its footprint, and its height is the model's plus the animation's height offset, so it hangs where the game's bar hangs.
+- With a 117 HD that supports it (its `unlit-models` message), every mark is drawn unlit: exactly the colour you set, in sun and shade and from any side.
 - **Outline threads** (General): outlines and clickboxes are worked out on several CPU threads, and their borders much faster.
 - NPC outlines leave out what the game does not draw from behind (one-sided capes, wings).
 - Zoomed in with marks through walls, the cut around your character costs about half as much (frame drops with the destination tile).

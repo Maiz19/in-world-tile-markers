@@ -6,8 +6,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BiPredicate;
 import javax.inject.Inject;
@@ -79,6 +81,8 @@ public class HdWorldMarkersPlugin extends Plugin
     private List<Marker> markers = Collections.emptyList();
     /** Of the markers, those drawn in the scene (the nearest MAX_TILES), picked once per tick rather than per frame. */
     private List<Marker> sceneMarkers = Collections.emptyList();
+    /** The boards other plugins sent (ExternalMarks), as they stand at the last client tick. */
+    private List<Board> boards = Collections.emptyList();
     private List<ModelTarget> modelTargets = Collections.emptyList();
     private Marker hover;
 
@@ -159,6 +163,7 @@ public class HdWorldMarkersPlugin extends Plugin
         if (all) { renderer.reset(); } else { renderer.clear(); }
         markers = Collections.emptyList();
         sceneMarkers = Collections.emptyList();
+        boards = Collections.emptyList();
         modelTargets = Collections.emptyList();
         hover = null;
     }
@@ -199,6 +204,7 @@ public class HdWorldMarkersPlugin extends Plugin
             sources.addOutlinesElsewhere(elsewhere);
             markers = tiles;
             sceneMarkers = nearest(tiles, client.getLocalPlayer().getLocalLocation(), MAX_TILES);
+            boards = externalMarks.boards(System.nanoTime());
             modelTargets = models;
         }
         catch (RuntimeException ex)
@@ -232,8 +238,11 @@ public class HdWorldMarkersPlugin extends Plugin
             // With its shadow transparency on every visible face casts (threshold 0.01): nothing to gain there.
             renderer.floatingAlphaCap = hdShadows && !transparentShadows ? SceneShapeRenderer.HD_CAP_OPAQUE_SHADOWS : 255;
             renderer.hdLightnessCap = hdNow[2];
+            // Boards (bars sent by other plugins) keep their colours between sun and shade there.
+            renderer.hdSteady = hdNow[3];
             if (hdShadows && transparentShadows) { warnShadowTransparency(); }
             renderer.begin(camera, 1f / stretchScale(), xray, client.getTopLevelWorldView().getPlane());
+            renderer.pixelY = 1f / stretchScaleY();
             hover = sources.hover();
             // The player's silhouette is left uncovered by marks through walls, and the In front NPCs' with the option.
             renderer.cutAround(config.charactersInFrontOfTiles() ? player : null,
@@ -247,11 +256,20 @@ public class HdWorldMarkersPlugin extends Plugin
                 SceneText.Style style = textStyle();
                 for (Marker m : sceneMarkers) { if (m.label != null && !m.label.isEmpty()) { renderer.label(m, style); } }
             }
+            // Boards other plugins sent (a health bar above a character): always in the scene, they have no 2D form.
+            if (!boards.isEmpty())
+            {
+                SceneText.Style style = textStyle();
+                long now = System.nanoTime();
+                int fps = client.getFPS();
+                for (Board b : boards) { renderer.board(b, style, now, fps); }
+            }
             List<ModelTarget> models = new ArrayList<>(modelTargets.subList(0, Math.min(MAX_MODELS, modelTargets.size())));
             // Outlines of things on a boat, carried into the main world as its tiles are.
             models.addAll(sources.outlinesElsewhere());
             renderer.models(models);
             boolean ok = renderer.end();
+            announceUnlit();
             sceneUnavailable = !ok;
             // A minute without failing: the next failure rests the shortest time again.
             if (ok && retryDelay > FIRST_RETRY && System.currentTimeMillis() > failedUntil + LAST_RETRY) { retryDelay = FIRST_RETRY; }
@@ -352,6 +370,15 @@ public class HdWorldMarkersPlugin extends Plugin
     }
 
     /** Canvas pixels per screen pixel is 1 / this; the GPU scene is rasterized at the stretched size. */
+    /** As stretchScale, downwards: stretched mode without its aspect ratio kept stretches the two unevenly. */
+    private float stretchScaleY()
+    {
+        if (!client.isStretchedEnabled()) { return 1f; }
+        Dimension real = client.getRealDimensions(), stretched = client.getStretchedDimensions();
+        if (real == null || stretched == null || real.height <= 0 || stretched.height <= 0) { return 1f; }
+        return stretched.height / (float) real.height;
+    }
+
     private float stretchScale()
     {
         if (!client.isStretchedEnabled()) { return 1f; }
@@ -432,6 +459,26 @@ public class HdWorldMarkersPlugin extends Plugin
         tilePacks.clear();
     }
 
+    /** The models last announced to 117 HD, and a count to ask again now and then (it may have been restarted). */
+    private Set<net.runelite.api.Model> announcedUnlit = Collections.emptySet();
+    private int unlitAsk;
+
+    /**
+     * Tells 117 HD which models (every mark's) to draw unlit, in exactly their own colours. A 117 HD that knows the
+     * message answers by setting "handled" in it; only then are the marks coloured plain (renderer.hdUnlit).
+     */
+    private void announceUnlit()
+    {
+        Set<net.runelite.api.Model> now = renderer.unlitModels();
+        if (unlitAsk++ % 64 != 0 && now.equals(announcedUnlit)) { return; }
+        Map<String, Object> data = new HashMap<>();
+        data.put("owner", "hd-world-markers");
+        data.put("models", now);
+        eventBus.post(new net.runelite.client.events.PluginMessage("117hd", "unlit-models", data));
+        announcedUnlit = now;
+        renderer.hdUnlit = Boolean.TRUE.equals(data.get("handled"));
+    }
+
     private boolean[] hdSettings()
     {
         boolean[] now = hdSettings;
@@ -445,7 +492,10 @@ public class HdWorldMarkersPlugin extends Plugin
         // capped, so white cannot help there.
         String shading = configManager.getConfiguration("hd", "experimentalShadingMode");
         boolean lightnessCap = hd && (shading == null || "DEFAULT".equals(shading)) && !"true".equals(configManager.getConfiguration("hd", "legacyGreyColors"));
-        return hdSettings = new boolean[]{shadows, transparent, lightnessCap};
+        // With 117 HD's Flat shading every face is lit by how it really stands, not by the normals given: a board
+        // faces the camera, so its light turns with the camera and no colour can be made for it.
+        boolean steady = lightnessCap && !"true".equals(configManager.getConfiguration("hd", "flatShading"));
+        return hdSettings = new boolean[]{shadows, transparent, lightnessCap, steady};
     }
 
     /**

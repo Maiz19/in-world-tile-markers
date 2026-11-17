@@ -54,6 +54,78 @@ final class FlatModel
         out[0] = capped; out[1] = Math.round(colourAlpha * 255); out[2] = Math.round(whiteAlpha * 255);
     }
 
+    /**
+     * The ambient light (linear) a steady colour is made for: between 117 HD's overworld (#97baff, strength 1) and
+     * the middle of all its areas. A face with its normal straight down gets no sun and no shadow from 117 HD,
+     * only this light, so its colour on the screen no longer changes between sun and shade.
+     */
+    static final float[] STEADY_AMBIENT = {0.38f, 0.49f, 0.95f};
+
+    /** Per lightness wanted (0-127), the lightness to send for a face with its normal down (see sentDown). */
+    private static final int[] SENT_DOWN = new int[128];
+    static
+    {
+        for (int want = 0; want < 128; want++)
+        {
+            int best = 0;
+            for (int l = 1; l < 128; l++)
+            {
+                if (Math.abs(lightenedDown(l) - want) < Math.abs(lightenedDown(best) - want)) { best = l; }
+            }
+            SENT_DOWN[want] = best;
+        }
+    }
+
+    /**
+     * What 117 HD's default shading makes of a lightness on a face with its normal straight down, before its cap
+     * (undoVanillaShading: it lightens faces the game's own light would have darkened, by the normal).
+     */
+    static int lightenedDown(int l) { return l + (int) (0.57735026f * (10 - l + (l < 3 ? 0 : (l - 3) * 3))); }
+
+    /** The packed colour to send so that 117 HD draws a face with its normal down in the given packed colour. */
+    static int sentDown(int hsl) { return (hsl & ~127) | SENT_DOWN[hsl & 127]; }
+
+    /**
+     * As layers, for a face with its normal straight down under 117 HD's default shading: the colour is divided
+     * by the ambient light it is made for, the white share of a colour over the lightness cap is solved as both
+     * are lit, and the lightness is the one 117 HD turns into the wanted one. Written to out as layers does.
+     */
+    static void steadyLayers(Color color, int alpha, int[] out)
+    {
+        float[] c = {color.getRed() / 255f, color.getGreen() / 255f, color.getBlue() / 255f};
+        int rgb = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            rgb = rgb << 8 | Math.round(encode(Math.min(1, decode(c[i]) / STEADY_AMBIENT[i])) * 255);
+        }
+        int hsl = JagexColor.rgbToHSL(rgb, 1.0) & 0xFFFF;
+        int max = maxLightness(hsl >> 7 & 7);
+        boolean over = (hsl & 127) > max;
+        int capped = over ? (hsl & ~127) | max : hsl;
+        out[0] = sentDown(capped); out[1] = alpha; out[2] = 0;
+        if (!over || alpha <= 0) { return; }
+        float[] p = lit(rgb(capped)), w = lit(WHITE_RGB);
+        float num = 0, den = 0;
+        for (int i = 0; i < 3; i++) { num += (c[i] - p[i]) * (w[i] - p[i]); den += (w[i] - p[i]) * (w[i] - p[i]); }
+        float t = den > 0 ? Math.max(0, Math.min(1, num / den)) : 0;
+        float a = alpha / 255f, whiteAlpha = a * t;
+        if (whiteAlpha * 255 < MIN_WHITE) { return; }
+        float colourAlpha = whiteAlpha >= 1 ? 0 : a * (1 - t) / (1 - whiteAlpha);
+        out[1] = Math.round(colourAlpha * 255); out[2] = Math.round(whiteAlpha * 255);
+    }
+
+    /** sRGB 0-1 as 117 HD shows a face of that colour under the steady ambient light alone. */
+    static float[] lit(float[] srgb)
+    {
+        float[] out = new float[3];
+        for (int i = 0; i < 3; i++) { out[i] = encode(Math.min(1, decode(srgb[i]) * STEADY_AMBIENT[i])); }
+        return out;
+    }
+
+    private static float decode(float c) { return c <= 0.04045f ? c / 12.92f : (float) Math.pow((c + 0.055f) / 1.055f, 2.4); }
+
+    private static float encode(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * (float) Math.pow(c, 1 / 2.4) - 0.055f; }
+
     /** 117 HD's lightness cap for a saturation (0-7), as its undoVanillaShading. */
     static int maxLightness(int saturation) { return (int) (127 - 72 * Math.pow(saturation / 7.0, 0.05)); }
 
@@ -99,11 +171,14 @@ final class FlatModel
     }
 
     /** Points every vertex normal straight up (model y is down, unit length 256). */
-    static void normals(Model m)
+    static void normals(Model m) { normals(m, false); }
+
+    /** Points every vertex normal straight up, or straight down: away from every sun, so 117 HD's sun and shadows skip it. */
+    static void normals(Model m, boolean down)
     {
         int[] nx = m.getVertexNormalsX(), ny = m.getVertexNormalsY(), nz = m.getVertexNormalsZ();
         if (nx == null || ny == null || nz == null) { return; }
-        for (int i = 0; i < nx.length; i++) { nx[i] = 0; ny[i] = -256; nz[i] = 0; }
+        for (int i = 0; i < nx.length; i++) { nx[i] = 0; ny[i] = down ? 256 : -256; nz[i] = 0; }
     }
 
     /** Recomputes the cached bounding box after vertices changed in place; the bounds cylinder stays fixed. */

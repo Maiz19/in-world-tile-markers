@@ -101,6 +101,7 @@ final class SceneShapeRenderer
     private void retire(Bucket b)
     {
         b.hide();
+        if (b.down) { if (b.model != null) { FlatModel.normals(b.model); } b.down = false; }
         Spare spare = b.release();
         if (spare != null && spareCarriers.size() < MAX_SPARES) { spareCarriers.addLast(spare); }
     }
@@ -227,6 +228,19 @@ final class SceneShapeRenderer
      * such as pink, would all turn into their pure colour: they are drawn as that colour with white over it.
      */
     boolean hdLightnessCap;
+    /**
+     * 117 HD with its default shading multiplies every face colour by the light where it stands (sun about 3.6x,
+     * shade under 1x and blue), so a board's colours changed with sun and shadow. With this on a board's
+     * rectangles go into objects of their own whose normals point straight down: no sun and no shadow on them,
+     * only the ambient light, which their colours are made for (FlatModel.steadyLayers).
+     */
+    boolean hdSteady;
+    /**
+     * This 117 HD draws the models announced to it unlit (its "unlit-models" message, see the plugin): every mark,
+     * tiles, outlines, labels and boards alike, is drawn in exactly its own colours, whatever the light or the
+     * camera. No lightness cap applies then (no white layer), and nothing needs to be steady.
+     */
+    boolean hdUnlit;
     /** Scratch for FlatModel.layers: {hsl, alpha, white alpha} of border and fill. */
     private final int[] borderLayers = new int[3], fillLayers = new int[3];
     private boolean unavailable;
@@ -361,6 +375,27 @@ final class SceneShapeRenderer
      */
     private final float[] billboard = new float[5];
     private boolean billboarding;
+    /** The shape being drawn is a board's rectangle under hdSteady: see there. */
+    private boolean steady;
+    /**
+     * While a board that stays on whole screen pixels is drawn: the slot of its hold, 0 for none. A hold is the screen
+     * pixel the board's point is on: it leaves that pixel only when the point is SNAP_HOLD of a pixel from it, so a
+     * point that wavers around the border of two pixels does not make the board hop back and forth. Kept per board
+     * (its key), read where the label vertices are placed for the camera the client draws with (Bucket.billboards).
+     */
+    private int snapSlot;
+    static final float SNAP_HOLD = 0.75f;
+    private static final int SNAP_SLOTS = 256;
+    private final Map<String, Integer> snapSlots = new HashMap<>();
+    private final float[] holdX = new float[SNAP_SLOTS + 1], holdY = new float[SNAP_SLOTS + 1];
+    private final boolean[] held = new boolean[SNAP_SLOTS + 1];
+    /** Per hold, whether its board hangs on the game's own overhead pixel instead (Board.overhead). */
+    private final boolean[] gameSlot = new boolean[SNAP_SLOTS + 1];
+    private final Object snapLock = new Object();
+    /** Canvas units per screen pixel downwards (pixel is sideways): the same unless stretched mode stretches unevenly. */
+    float pixelY = 1;
+    private final float[] rect = new float[8];
+    private static final int[] RECT_TRIS = {0, 1, 2, 0, 2, 3};
     /**
      * The boat (a world entity's world view) under the tile, label or model being drawn: its points are carried into the main
      * world, where the scene objects hang, with the boat's position of this frame; null on the main world. The shape's
@@ -385,7 +420,7 @@ final class SceneShapeRenderer
         this.xrayLevel = xrayLevel;
         this.camera = camera;
         boat = null;
-        pixel = canvasPerPixel;
+        pixel = pixelY = canvasPerPixel;
         appended.clear();
         frame++;
         outlineNanos = 0;
@@ -574,6 +609,176 @@ final class SceneShapeRenderer
         }
         billboarding = false;
         return any;
+    }
+
+    /**
+     * A board another plugin sent (ExternalMarks): its rectangles and texts in the scene as a label's glyphs are, at
+     * their canvas places from where its point projects, facing the camera the client draws with. Its point glides
+     * between the character's steps when it has a glide (nanos: System.nanoTime now), and with snap everything lies
+     * on whole screen pixels. Returns whether it is in the scene this frame.
+     */
+    boolean board(Board b, SceneText.Style style, long nanos, int fps)
+    {
+        LocalPoint at = b.at();
+        WorldView wv = unavailable ? null : view(at);
+        if (wv == null) { return false; }
+        int level = Terrain.level(wv, at.getSceneX(), at.getSceneY(), b.plane);
+        float bx = at.getX(), by = at.getY();
+        // Not on a boat, which carries the character.
+        if (boat == null && b.glide != null && b.glide.at(nanos, fps, point)) { bx = point[0]; by = point[1]; }
+        float height = Terrain.heightOnLevel(wv, Math.round(bx), Math.round(by), level) - b.lift;
+        // On the game's own overhead point: the ground as the game takes it there, and the height of the model in the
+        // pose of this frame, which the game notes when the model is built.
+        boolean game = b.overhead && b.follow != null && boat == null;
+        if (game)
+        {
+            // Your own character only: building every followed character's model again costs too much; the others
+            // keep the height of the frame before (the same pose, but for the first frame after it changed).
+            if (b.follow == client.getLocalPlayer()) { b.follow.getModel(); }
+            // The game's ground under an actor is the highest of its footprint, not one point: on a slope its bar hangs higher.
+            height = net.runelite.api.Perspective.getFootprintTileHeight(client, at, wv.getPlane(), b.follow.getFootprintSize())
+                - (b.follow.getLogicalHeight() + b.follow.getAnimationHeightOffset() + Board.OVERHEAD_Z);
+        }
+        toCanvas(bx, by, height, point);
+        if (!(point[2] >= PARTIAL_NEAR)) { return false; }
+        if (boat != null) { billboard[0] = carried[0]; billboard[1] = carried[2]; billboard[2] = carried[1]; }
+        else { billboard[0] = bx; billboard[1] = by; billboard[2] = height; }
+        float x = point[0], y = point[1], depth = labelDepth(point[2]);
+        billboard[3] = x; billboard[4] = y;
+        float gx = b.snap ? pixel : 0, gy = b.snap ? pixelY : 0;
+        boolean any = false;
+        billboarding = true;
+        snapSlot = b.snap || game ? snapSlot(b.key) : 0;
+        synchronized (snapLock) { gameSlot[snapSlot] = game && snapSlot > 0; }
+        layer = LABEL_SHADOW_LAYER;
+        steady = hdSteady && !hdUnlit;
+        for (int i = 0; i < b.colors.length; i++)
+        {
+            float left = grid(b.rects[4 * i], gx), top = grid(b.rects[4 * i + 1], gy);
+            // Never thinner than a screen pixel.
+            float right = Math.max(grid(b.rects[4 * i] + b.rects[4 * i + 2], gx), left + gx);
+            float bottom = Math.max(grid(b.rects[4 * i + 1] + b.rects[4 * i + 3], gy), top + gy);
+            rect[0] = left; rect[1] = top; rect[2] = right; rect[3] = top; rect[4] = right; rect[5] = bottom; rect[6] = left; rect[7] = bottom;
+            if (!outline.buildMesh(rect, RECT_TRIS, depth, x, y)) { continue; }
+            if (offscreen()) { any |= culled(b.key); continue; }
+            // An opaque rectangle stays opaque where floating marks are capped see-through (117 HD's shadows): four of
+            // it over each other, on the two label layers and their white layers, each under the cap.
+            boolean solid = floatingAlphaCap < 255 && b.colors[i].getAlpha() == 255;
+            twice = solid;
+            any |= draw(b.key, at, level, b.colors[i], Marker.NO_FILL, true);
+            if (solid) { layer = LABEL_LAYER; draw(b.key, at, level, b.colors[i], Marker.NO_FILL, true); layer = LABEL_SHADOW_LAYER; }
+            twice = false;
+        }
+        // The texts keep the usual path: a white number needs the sun, the ambient light alone cannot make white.
+        steady = false;
+        // The texts as a label's: the edge (shadow or outline) first, a layer under the text; twice each under the cap.
+        twice = floatingAlphaCap < 255;
+        for (int pass = 0; pass < 2 && b.texts.length > 0; pass++)
+        {
+            layer = pass == 0 ? LABEL_SHADOW_LAYER : LABEL_LAYER;
+            for (int i = 0; i < b.texts.length; i++)
+            {
+                float tx = x + grid(b.textAt[2 * i], gx), ty = y + grid(b.textAt[2 * i + 1], gy);
+                Color color = new Color(b.textColors[i].getRGB() & 0xffffff);
+                int edgeWidth = b.textEdges == null ? 0 : b.textEdges[i];
+                SceneText.Style own = b.textSizes[i] > 0 || b.textFonts[i] != null || edgeWidth > 0 ? ownStyle(style, b.textFonts[i], b.textSizes[i], edgeWidth) : style;
+                for (SceneText.Glyph glyph : (own == style ? text : ownText).glyphs(b.texts[i], own))
+                {
+                    OutlinePaint.Mesh mesh = pass == 0 ? glyph.edge : glyph.fill;
+                    if (mesh == null || !outline.buildMesh(mesh.xy, mesh.tris, depth, tx, ty)) { continue; }
+                    if (offscreen()) { any |= culled(b.key); continue; }
+                    any |= draw(b.key, at, level, pass == 0 ? style.edgeColor : color, Marker.NO_FILL, true);
+                }
+            }
+        }
+        billboarding = false;
+        twice = false;
+        steady = false;
+        snapSlot = 0;
+        return any;
+    }
+
+    /**
+     * The style of a board text with a size or font of its own (0 / null: the Text settings'), the edge as the Text
+     * settings; ownText is then the maker of its glyphs. A maker per style, so each keeps the glyphs it made.
+     */
+    private SceneText.Style ownStyle(SceneText.Style base, HdWorldMarkersConfig.TextFont font, int size, int edgeWidth)
+    {
+        HdWorldMarkersConfig.TextFont kind = font != null ? font : base.kind;
+        int points = size > 0 ? size : base.size;
+        long key = kind.ordinal() | (long) points << 4 | (long) base.edge.ordinal() << 12 | ((long) base.edgeColor.getRGB() & 0xFFFFFFFFL) << 16 ^ (long) edgeWidth << 52;
+        SceneText.Style made = ownStyles.get(key);
+        if (made == null)
+        {
+            if (ownStyles.size() >= 8) { ownStyles.clear(); ownTexts.clear(); }
+            made = new SceneText.Style(kind, points, base.edge, base.edgeColor, edgeWidth);
+            ownStyles.put(key, made);
+            ownTexts.put(key, new SceneText());
+        }
+        ownText = ownTexts.get(key);
+        return made;
+    }
+
+    /** Faces staged so far this frame, for tests. */
+    int stagedFaces() { int n = 0; for (Stage st : stages.values()) { n += st.faces; } return n; }
+    /** The models of all scene objects now: the ones 117 HD is asked to draw unlit. */
+    Set<Model> unlitModels()
+    {
+        Set<Model> models = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Bucket b : buckets.values()) { if (b.model != null) { models.add(b.model); } }
+        return models;
+    }
+
+    /** Of those, the faces in steady objects (hdSteady), for tests. */
+    int stagedSteadyFaces() { int n = 0; for (Stage st : stages.values()) { if (st.steady) { n += st.faces; } } return n; }
+
+    /** Whether draw adds a second copy of the shape just over it: a board's opaque parts, see board. */
+    private boolean twice;
+    private final Map<Long, SceneText.Style> ownStyles = new HashMap<>();
+    private final Map<Long, SceneText> ownTexts = new HashMap<>();
+    private SceneText ownText;
+
+    /** A canvas distance on the grid of whole screen pixels (step: canvas units per screen pixel); as it is for step 0. */
+    private static float grid(float value, float step) { return step > 0 ? Math.round(value / step) * step : value; }
+
+    /** The slot of a board's hold: one per key, 0 (no hold) once they are all taken. */
+    private int snapSlot(String key)
+    {
+        synchronized (snapLock)
+        {
+            Integer slot = snapSlots.get(key);
+            if (slot == null)
+            {
+                if (snapSlots.size() >= SNAP_SLOTS) { return 0; }
+                slot = snapSlots.size() + 1;
+                snapSlots.put(key, slot);
+            }
+            return slot;
+        }
+    }
+
+    /**
+     * Puts a board's point (q: its canvas x and y) on the whole screen pixel it is held on (see snapSlot). A board on
+     * the game's own overhead point (gameSlot) takes the screen pixel nearest the canvas pixel the game works out
+     * for that point (ax, ay, az) with this camera: no hold, as the game has none.
+     */
+    private void snap(int slot, float[] q, ModelShapes.Camera cam, float ax, float ay, float az)
+    {
+        float px = pixel, py = pixelY;
+        if (slot > SNAP_SLOTS || !(px > 0) || !(py > 0)) { return; }
+        synchronized (snapLock)
+        {
+            if (gameSlot[slot] && cam.gamePixel(ax, ay, az, q))
+            {
+                q[0] = Math.round(q[0] / px) * px; q[1] = Math.round(q[1] / py) * py;
+                return;
+            }
+            float sx = q[0] / px, sy = q[1] / py;
+            if (!held[slot] || Math.abs(sx - holdX[slot]) > SNAP_HOLD) { holdX[slot] = Math.round(sx); }
+            if (!held[slot] || Math.abs(sy - holdY[slot]) > SNAP_HOLD) { holdY[slot] = Math.round(sy); }
+            held[slot] = true;
+            q[0] = holdX[slot] * px; q[1] = holdY[slot] * py;
+        }
     }
 
     /** A label's depth from that of its point: through walls as is (pulled to the camera when drawn), else a tile nearer. */
@@ -1074,7 +1279,7 @@ final class SceneShapeRenderer
         // Through walls applies to every shape, tiles as well as hulls, clickboxes, outlines and pies: all of them then
         // sit at the same place in front of the camera, so lighting renderers (117 HD: shadows, fog, lights) shade them
         // all alike.
-        boolean xray = this.xray;
+        boolean xray = this.xray, steady = this.steady;
         // World points of the shape: on the ground for through walls (moved to the camera at draw time),
         // else just above it towards the camera. Later layers slightly nearer, so shapes never z-fight.
         place(xray, false);
@@ -1095,24 +1300,29 @@ final class SceneShapeRenderer
         // Floating marks under 117 HD stay under its shadow threshold; labels stand up from the ground too.
         int cap = xray || layer >= LABEL_SHADOW_LAYER ? floatingAlphaCap : 255;
         // The cap applies to the colour as a whole, before it is split into layers that blend to it.
-        layers(border, Math.min(cap, hasBorder ? border.getAlpha() : 0), borderLayers);
-        layers(fill, Math.min(cap, fill.getAlpha()), fillLayers);
+        layers(border, Math.min(cap, hasBorder ? border.getAlpha() : 0), steady, borderLayers);
+        layers(fill, Math.min(cap, fill.getAlpha()), steady, fillLayers);
         int borderHsl = borderLayers[0], borderAlpha = borderLayers[1], borderWhite = borderLayers[2];
         int fillHsl = fillLayers[0], fillAlpha = fillLayers[1], fillWhite = fillLayers[2];
         // The white layer: a second copy of the outline, just nearer the camera so it is drawn over the colour.
         boolean white = borderWhite > 0 || fillWhite > 0;
         // A single shape too large for any scene object is left out; a bucket past the carrier limits fails the whole frame.
-        int addVertices = outline.vertices * (white ? 2 : 1), addFaces = outline.faces * (white ? 2 : 1);
+        // Twice (a board's opaque parts under the cap): a second copy where the white layer would be.
+        boolean twice = this.twice && cap < 255 && !white;
+        int addVertices = outline.vertices * (white || twice ? 2 : 1), addFaces = outline.faces * (white || twice ? 2 : 1);
         if (!carriers.fits(addVertices, addFaces, 2)) { return false; }
         if (!shared && !within(tileX * 128 + 64, tileY * 128 + 64, Terrain.heightOnLevel(top, tileX * 128 + 64, tileY * 128 + 64, level),
                 xray ? XRAY_REACH - 200 : MAX_RADIUS - 300)) { return false; }
         // Through-walls shapes get their own buckets: they are moved to the camera, others are not.
-        long base = ((long) level << 32) | ((long) tileX << 16) | tileY | (xray ? 1L << 40 : 0) | (shared ? 1L << 39 : 0);
+        // Steady shapes too: their objects' normals point down.
+        long base = ((long) level << 32) | ((long) tileX << 16) | tileY | (xray ? 1L << 40 : 0) | (shared ? 1L << 39 : 0)
+            | (steady ? 1L << 38 : 0);
         Stage st = stages.get(base);
         if (st == null) { st = new Stage(tileX, tileY, level, anchor.getWorldView()); stages.put(base, st); }
         st.ensure(st.vertices + addVertices, st.faces + addFaces);
         st.xray = xray;
         st.shared = shared;
+        st.steady = steady;
         st.begin(layer, key);
         // Labels stay whole over the actors, and faces of model marks in front of them (cutsAround, front; see Bucket's cutter).
         front();
@@ -1123,20 +1333,28 @@ final class SceneShapeRenderer
             if (!xray) { place(false, true); }
             append(st, layer + 0.5f, FlatModel.WHITE, borderWhite, FlatModel.WHITE, fillWhite);
         }
+        else if (twice)
+        {
+            if (!xray) { place(false, true); }
+            append(st, layer + 0.5f, borderHsl, borderAlpha, fillHsl, fillAlpha);
+        }
         st.end();
         appended.add(key);
         return true;
     }
 
-    private void layers(Color color, int alpha, int[] out)
+    private void layers(Color color, int alpha, boolean steady, int[] out)
     {
-        long key = (long) color.getRGB() << 9 | alpha << 1 | (hdLightnessCap ? 1 : 0);
+        boolean plain = hdUnlit;
+        long key = (long) color.getRGB() << 11 | alpha << 3 | (plain ? 4 : 0) | (steady ? 2 : 0) | (hdLightnessCap ? 1 : 0);
         int[] known = layerCache.get(key);
         if (known == null)
         {
             if (layerCache.size() > 1024) { layerCache.clear(); }
             known = new int[3];
-            FlatModel.layers(color, alpha, hdLightnessCap, known);
+            if (plain) { FlatModel.layers(color, alpha, false, known); }
+            else if (steady) { FlatModel.steadyLayers(color, alpha, known); }
+            else { FlatModel.layers(color, alpha, hdLightnessCap, known); }
             layerCache.put(key, known);
         }
         System.arraycopy(known, 0, out, 0, 3);
@@ -1178,6 +1396,7 @@ final class SceneShapeRenderer
             b.ox[first + i] = billboarding ? outline.x[i] - billboard[3] : Float.NaN;
             b.oy[first + i] = outline.y[i] - billboard[4];
             b.ax[first + i] = billboard[0]; b.ay[first + i] = billboard[1]; b.az[first + i] = billboard[2];
+            b.sn[first + i] = billboarding ? snapSlot : 0;
         }
         b.vertices += outline.vertices;
         for (int f = 0; f < outline.faces; f++)
@@ -1500,7 +1719,7 @@ final class SceneShapeRenderer
             System.arraycopy(st.wx, firstVertex, b.wx, b.vertices, nv); System.arraycopy(st.wy, firstVertex, b.wy, b.vertices, nv);
             System.arraycopy(st.wz, firstVertex, b.wz, b.vertices, nv); System.arraycopy(st.layer, firstVertex, b.layer, b.vertices, nv);
             System.arraycopy(st.front, firstVertex, b.front, b.vertices, nv);
-            System.arraycopy(st.ox, firstVertex, b.ox, b.vertices, nv); System.arraycopy(st.oy, firstVertex, b.oy, b.vertices, nv);
+            System.arraycopy(st.ox, firstVertex, b.ox, b.vertices, nv); System.arraycopy(st.oy, firstVertex, b.oy, b.vertices, nv); System.arraycopy(st.sn, firstVertex, b.sn, b.vertices, nv);
             System.arraycopy(st.ax, firstVertex, b.ax, b.vertices, nv); System.arraycopy(st.ay, firstVertex, b.ay, b.vertices, nv);
             System.arraycopy(st.az, firstVertex, b.az, b.vertices, nv);
             for (int f = firstFace; f < firstFace + nf; f++)
@@ -1519,7 +1738,7 @@ final class SceneShapeRenderer
     {
         int i = b.vertices++;
         b.wx[i] = st.wx[v]; b.wy[i] = st.wy[v]; b.wz[i] = st.wz[v]; b.layer[i] = st.layer[v]; b.front[i] = st.front[v];
-        b.ox[i] = st.ox[v]; b.oy[i] = st.oy[v]; b.ax[i] = st.ax[v]; b.ay[i] = st.ay[v]; b.az[i] = st.az[v];
+        b.ox[i] = st.ox[v]; b.oy[i] = st.oy[v]; b.ax[i] = st.ax[v]; b.ay[i] = st.ay[v]; b.az[i] = st.az[v]; b.sn[i] = st.sn[v];
         return i;
     }
 
@@ -1530,6 +1749,7 @@ final class SceneShapeRenderer
         if (b == null) { b = new Bucket(st.tileX, st.tileY, st.level, st.worldView); buckets.put(id, b); }
         b.xray = st.xray;
         b.shared = st.shared;
+        b.steady = st.steady;
         return b;
     }
 
@@ -1597,6 +1817,8 @@ final class SceneShapeRenderer
             }
         }
         Model m = b.model;
+        // A steady object's model looks away from every sun; it goes back to the spares looking up (retire).
+        if (b.steady != b.down) { FlatModel.normals(m, b.steady); b.down = b.steady; }
         if (b.xray)
         {
             // Through walls, getModel writes the vertices and faces with the camera the client draws with (pullToCamera):
@@ -1841,11 +2063,15 @@ final class SceneShapeRenderer
         int[] front = new int[64];
         /** Per vertex of a label, its place in canvas pixels from where its point {ax, ay, az} projects; ox NaN for others. */
         float[] ox = new float[64], oy = new float[64], ax = new float[64], ay = new float[64], az = new float[64];
+        /** Per vertex of a board that stays on whole screen pixels, the slot of its hold (snap); 0 for others. */
+        float[] sn = new float[64];
         int[] fa = new int[96], fb = new int[96], fc = new int[96], color = new int[96], alpha = new int[96];
         /** Per face, whether it is of the shape's border (else its fill): the border is cut around the whole actor, the fill around what is seen. */
         boolean[] border = new boolean[96];
         int vertices, faces;
         boolean xray, shared;
+        /** Its faces get no sun and no shadow from 117 HD (hdSteady). */
+        boolean steady;
 
         Geometry(int tileX, int tileY, int level, int worldView)
         { this.tileX = tileX; this.tileY = tileY; this.level = level; this.worldView = worldView; }
@@ -1858,7 +2084,7 @@ final class SceneShapeRenderer
                 wx = Arrays.copyOf(wx, n); wy = Arrays.copyOf(wy, n); wz = Arrays.copyOf(wz, n);
                 layer = Arrays.copyOf(layer, n);
                 front = Arrays.copyOf(front, n);
-                ox = Arrays.copyOf(ox, n); oy = Arrays.copyOf(oy, n); ax = Arrays.copyOf(ax, n); ay = Arrays.copyOf(ay, n); az = Arrays.copyOf(az, n);
+                ox = Arrays.copyOf(ox, n); oy = Arrays.copyOf(oy, n); ax = Arrays.copyOf(ax, n); ay = Arrays.copyOf(ay, n); az = Arrays.copyOf(az, n); sn = Arrays.copyOf(sn, n);
             }
             if (fa.length < faceCount)
             {
@@ -1929,6 +2155,8 @@ final class SceneShapeRenderer
     /** All shapes of one tile and level, merged into one scene object. */
     private final class Bucket extends Geometry
     {
+        /** The model's normals point down now (steady), else up. */
+        boolean down;
         final RuneLiteObjectController object = new RuneLiteObjectController()
         {
             @Override public Model getModel() { return Bucket.this.getModel(); }
@@ -1950,7 +2178,7 @@ final class SceneShapeRenderer
         private float[] fx = new float[0], fy = fx, fz = fx;
         private float[] fl = new float[0];
         private int[] ffront = new int[0];
-        private float[] fox = fl, foy = fl, fax = fl, fay = fl, faz = fl;
+        private float[] fox = fl, foy = fl, fax = fl, fay = fl, faz = fl, fsn = fl;
         /** It holds a label, whose vertices follow the camera the client draws with (billboards). */
         private boolean labels;
         private int frozenVertices, fAnchorX, fAnchorY, fAnchorZ;
@@ -1989,8 +2217,8 @@ final class SceneShapeRenderer
             if (fx.length < vertices) { fx = new float[wx.length]; fy = new float[wx.length]; fz = new float[wx.length]; fl = new float[wx.length]; ffront = new int[wx.length]; }
             System.arraycopy(wx, 0, fx, 0, vertices); System.arraycopy(wy, 0, fy, 0, vertices);
             System.arraycopy(wz, 0, fz, 0, vertices); System.arraycopy(layer, 0, fl, 0, vertices); System.arraycopy(front, 0, ffront, 0, vertices);
-            if (fox.length < vertices) { fox = new float[wx.length]; foy = new float[wx.length]; fax = new float[wx.length]; fay = new float[wx.length]; faz = new float[wx.length]; }
-            System.arraycopy(ox, 0, fox, 0, vertices); System.arraycopy(oy, 0, foy, 0, vertices);
+            if (fox.length < vertices) { fox = new float[wx.length]; foy = new float[wx.length]; fax = new float[wx.length]; fay = new float[wx.length]; faz = new float[wx.length]; fsn = new float[wx.length]; }
+            System.arraycopy(ox, 0, fox, 0, vertices); System.arraycopy(oy, 0, foy, 0, vertices); System.arraycopy(sn, 0, fsn, 0, vertices);
             System.arraycopy(ax, 0, fax, 0, vertices); System.arraycopy(ay, 0, fay, 0, vertices); System.arraycopy(az, 0, faz, 0, vertices);
             labels = false;
             for (int i = 0; i < vertices && !labels; i++) { labels = !Float.isNaN(ox[i]); }
@@ -2098,6 +2326,7 @@ final class SceneShapeRenderer
                 if (Float.isNaN(fox[i])) { continue; }
                 cam.project(fax[i], fay[i], faz[i], q);
                 if (!(q[2] >= PARTIAL_NEAR)) { continue; }
+                if (fsn[i] > 0) { snap((int) fsn[i], q, cam, fax[i], fay[i], faz[i]); }
                 float d = Math.max(PARTIAL_NEAR, q[2] - LABEL_NEARER), l = fl[i];
                 cam.unproject(q[0] + fox[i], q[1] + foy[i], nearer(d, (int) l, l != (int) l), p);
                 vx[i] = p[0] - fAnchorX;

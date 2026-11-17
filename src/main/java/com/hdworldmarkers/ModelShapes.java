@@ -46,10 +46,30 @@ final class ModelShapes
     static final class Camera
     {
         final float x, y, z, pitch, yaw, pitchSin, pitchCos, yawSin, yawCos, scale, centerX, centerY;
+        /**
+         * The camera as the game's own whole-number projection takes it (gamePixel): its place in whole local units,
+         * its pitch and yaw in 16384 steps a turn, the zoom and the middle of the viewport in whole pixels.
+         */
+        final int wholeX, wholeY, wholeZ, wholePitch, wholeYaw, wholeScale, wholeCenterX, wholeCenterY;
+        private static final int TURN = 16384;
 
+        /** A camera whose whole-number form is this one's with the fractions dropped (the client's own: of). */
         Camera(float x, float y, float z, float pitch, float yaw, int scale,
             int viewportX, int viewportY, int viewportWidth, int viewportHeight)
         {
+            this(x, y, z, pitch, yaw, scale, viewportX, viewportY, viewportWidth, viewportHeight, (int) x, (int) y, (int) z,
+                (int) (pitch / (2 * Math.PI) * TURN) & (TURN - 1), (int) (yaw / (2 * Math.PI) * TURN) & (TURN - 1));
+        }
+
+        Camera(float x, float y, float z, float pitch, float yaw, int scale,
+            int viewportX, int viewportY, int viewportWidth, int viewportHeight,
+            int wholeX, int wholeY, int wholeZ, int wholePitch, int wholeYaw)
+        {
+            this.wholeX = wholeX; this.wholeY = wholeY; this.wholeZ = wholeZ;
+            this.wholePitch = wholePitch & (TURN - 1); this.wholeYaw = wholeYaw & (TURN - 1);
+            wholeScale = scale;
+            wholeCenterX = viewportX + viewportWidth / 2;
+            wholeCenterY = viewportY + viewportHeight / 2;
             this.x = x; this.y = y; this.z = z; this.pitch = pitch; this.yaw = yaw;
             pitchSin = (float) Math.sin(pitch); pitchCos = (float) Math.cos(pitch);
             yawSin = (float) Math.sin(yaw); yawCos = (float) Math.cos(yaw);
@@ -70,7 +90,29 @@ final class ModelShapes
             int vw = client.getViewportWidth(), vh = client.getViewportHeight();
             if (last != null && last.x == x && last.y == y && last.z == z && last.pitch == pitch && last.yaw == yaw && last.scale == scale
                 && last.centerX == vx + vw / 2f && last.centerY == vy + vh / 2f) { return last; }
-            return new Camera(x, y, z, pitch, yaw, scale, vx, vy, vw, vh);
+            return new Camera(x, y, z, pitch, yaw, scale, vx, vy, vw, vh, client.getCameraX(), client.getCameraY(),
+                client.getCameraZ(), client.getCameraPitch(), client.getCameraYaw());
+        }
+
+        /**
+         * The whole canvas pixel the game itself puts this point on, as it does for a character's health bar, head
+         * icons and overhead text: its own whole-number maths (the camera in whole units, table angles, shifts, a
+         * division that drops the fraction), which RuneLite's Perspective holds for the software renderer. Writes
+         * canvas x and y into out and leaves the rest of it; false (out untouched) nearer than the game draws.
+         */
+        boolean gamePixel(float lx, float ly, float lz, float[] out)
+        {
+            int ps = net.runelite.api.Perspective.SINE14[wholePitch], pc = net.runelite.api.Perspective.COSINE14[wholePitch];
+            int ys = net.runelite.api.Perspective.SINE14[wholeYaw], yc = net.runelite.api.Perspective.COSINE14[wholeYaw];
+            int dx = Math.round(lx) - wholeX, dy = Math.round(ly) - wholeY, dz = Math.round(lz) - wholeZ;
+            int x1 = dx * yc + dy * ys >> 16;
+            int y1 = dy * yc - dx * ys >> 16;
+            int y2 = dz * pc - y1 * ps >> 16;
+            int depth = y1 * pc + dz * ps >> 16;
+            if (depth < 50) { return false; }
+            out[0] = wholeCenterX + x1 * wholeScale / depth;
+            out[1] = wholeCenterY + y2 * wholeScale / depth;
+            return true;
         }
 
         /** Whether another camera projects exactly as this one. */

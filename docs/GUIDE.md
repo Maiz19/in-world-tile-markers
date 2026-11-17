@@ -83,6 +83,8 @@ Every message has `owner`, a string of your own (a message without one is ignore
 | `pies` | `pies` | Replaces all pies of `owner`. |
 | `lines` | `lines` | Replaces all lines of `owner`. |
 | `texts` | `texts` | Replaces all texts of `owner`. |
+| `boards` | `boards` | Replaces all boards of `owner`. |
+| `hello` | none | Adds the names of the messages this version takes to your collection `kinds`. |
 | `clear` | none | Removes everything of `owner`. |
 
 Each list holds maps; a map without its required fields is skipped. Colours are a `Color` or an ARGB int: an int without alpha (`0x00FFFF`) is fully see-through, so write `0xFF00FFFF`. Numbers may be any `Number`. A point is a `WorldPoint` under `point`, or numbers `x`, `y` and `plane` (default 0). In an instance (a player-owned house, a raid) a point can be where it is now (`getWorldLocation`) or its template tile, as Ground Markers saves it; a template tile is drawn in every place the instance shows it.
@@ -161,6 +163,44 @@ A pie fills clockwise from the top, as RuneLite's progress pies, stands towards 
 | `height` | optional: local units above the ground | 0; following a character, above its head |
 
 Text on its own, drawn as a tile's label, without a tile under it.
+
+**Boards**
+
+| Field | | Default |
+|---|---|---|
+| `point`, or what it follows | required: as for pies | |
+| `rects` | a list of maps with `x`, `y`, `width`, `height` and `color` | none |
+| `texts` | a list of maps with `text`, `color`, `x` and `y`: centred on `x`, its baseline on `y`; optional `size` and `font` (`RUNESCAPE`, `RUNESCAPE_BOLD`, `RUNESCAPE_SMALL`, `SMOOTH`, `SMOOTH_BOLD`) | none; the Text settings' size and font |
+| `height` | optional: local units above the ground, fractions allowed | 0; following a character, above its head |
+| `glide` | optional: `true` lets a board that follows a character glide between the character's steps | false |
+| `snap` | optional: `false` lets it lie between screen pixels | true |
+| `overhead` | optional: `true` hangs a board that follows a character on the game's own overhead point (`height` and `glide` are not used) | false |
+
+A flat sign facing the camera, such as a health bar with its numbers: coloured rectangles and texts, drawn in the world and so sharp in stretched mode. Places and sizes are canvas pixels from where the board's point is on the screen, `x` to the right and `y` down; fractions are allowed. Rectangles are drawn in the order of the list, a later one over an earlier. The texts use the Text settings.
+
+- With `snap` the board stays on whole screen pixels: every edge lies a whole number of them from its point and nothing is thinner than one, so a line is as thick wherever the board is. In stretched mode a screen pixel is less than a canvas pixel: give sizes in canvas pixels that come out whole on the screen (the screen's width divided by the canvas's is the stretch).
+- With `overhead` the board hangs where the game hangs that character's own health bar and head icons: the character's place of this game step, the height of its model in this frame's pose + the animation's height offset + 15, on the whole canvas pixel the game itself works out (the ground there is the highest ground of the character's footprint, as the game takes it). It then never moves against the game's overhead icons, text and hitsplats, and hops and bobs with the character exactly as they do.
+- With `glide` the board does not jump with the character's 50 steps a second but glides between them, as the camera does with an unlocked frame rate: it stays still on the screen while you walk.
+- A board has no 2D form: it shows while the marks are drawn in the world (the GPU or 117 HD plugin).
+- 117 HD lights everything in the world: a colour is brighter in the sun and darker and bluer in the shade. With its default shading, and its Flat shading off, a board's rectangles are kept out of that: sun and shadow do not change them, and their colours are made for the light of the overworld, so they stay close to the colours sent. Very light colours come out a little duller, and in areas with other light the colours shift with it. Texts keep the game's light (white needs it); put a text beside or above the rectangles, not over them.
+- A 117 HD that knows the `unlit-models` message (namespace `117hd`) draws every mark of HD World Markers unlit, boards too: exactly the colours set or sent, in any light, from any side, also with its Flat shading on. HD World Markers asks by itself.
+
+Older versions do not know `boards` and draw nothing for it. To find out, send `hello` first:
+
+```java
+List<Object> kinds = new ArrayList<>();
+Map<String, Object> hello = new HashMap<>();
+hello.put("owner", "my-plugin");
+hello.put("kinds", kinds);
+eventBus.post(new PluginMessage("hd-world-markers", "hello", hello));
+boolean boards = kinds.contains("boards");   // false: an older version, or not installed
+boolean ownText = kinds.contains("board-text-style");   // a board text takes its own size and font
+boolean overhead = kinds.contains("board-overhead");    // a board can hang on the game's own overhead point
+```
+
+A rectangle with an opaque colour is drawn opaque, also under 117 HD without shadow transparency, where labels and other floating marks are a little see-through (it is drawn four times over itself, each time see-through enough to cast no shadow). Give it an alpha under 255 to let the world show through.
+
+A board takes up to 512 rectangles (the first version with boards: 128, the rest left out) and 16 texts.
 
 **Lines**
 

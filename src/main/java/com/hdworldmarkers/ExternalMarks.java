@@ -49,6 +49,18 @@ import net.runelite.client.util.Text;
  * out. Optional {@code arrows} (a number n): a small filled arrowhead on the ground every n tiles counted from the line's
  * end (so they stay put while the sender trims the start as the player walks), pointing the way the points go.
  * Replaces all lines of that owner; at most {@value #MAX_PER_OWNER} points in all.</li>
+ * <li>{@code boards}: {@code owner} and {@code boards}, a list of maps with where (a point, or an NPC or player as
+ * for pies), optional {@code height} (local units above the ground, fractions allowed), {@code rects} (a list of maps
+ * with {@code x}, {@code y}, {@code width}, {@code height} and {@code color}) and {@code texts} (a list of maps with
+ * {@code text}, {@code color}, {@code x} and {@code y}: centred on x, its baseline on y). A flat sign facing the
+ * camera, such as a health bar with its numbers: all places and sizes in canvas pixels from where its point projects
+ * (x to the right, y down), drawn in the scene and so sharp in stretched mode. It stays on whole screen pixels unless
+ * {@code snap} is false, and with {@code glide} true one that follows a character glides between the character's
+ * steps (Board). With {@code overhead} true one that follows a character hangs on the game's own overhead point
+ * instead, where the game hangs that character's health bar and head icons ({@code height} and {@code glide} are
+ * not used then). Replaces all boards of that owner.</li>
+ * <li>{@code hello}: {@code owner} and {@code kinds}, a collection of your own: the names of the messages this
+ * version takes are added to it, so a sender can tell whether a newer kind will be drawn.</li>
  * <li>{@code clear}: {@code owner}. Removes everything of that owner.</li>
  * </ul>
  * Marks stay until their owner replaces or clears them.
@@ -63,7 +75,14 @@ final class ExternalMarks
 
     private final Client client;
     private final Map<String, List<Map<String, Object>>> tiles = new ConcurrentHashMap<>(), pies = new ConcurrentHashMap<>(),
-        lines = new ConcurrentHashMap<>(), texts = new ConcurrentHashMap<>();
+        lines = new ConcurrentHashMap<>(), texts = new ConcurrentHashMap<>(), boards = new ConcurrentHashMap<>();
+    /** The messages this version takes (hello). */
+    static final List<String> KINDS = Collections.unmodifiableList(Arrays.asList("tiles", "npcs", "players", "objects", "items",
+        "pies", "lines", "texts", "boards", "hello", "clear"));
+    /** Per board that glides, its character's last places (Board.Glide): kept while the board is sent. */
+    private final Map<String, Board.Glide> glides = new HashMap<>();
+    /** Per board, at most this many rectangles and texts. */
+    static final int MAX_BOARD_RECTS = 512, MAX_BOARD_TEXTS = 16, MAX_BOARD_TEXT_SIZE = 64, MAX_BOARD_TEXT_EDGE = 4;
     /** Per kind of highlight (npcs, players, objects, items), each owner's list. */
     private final Map<String, Map<String, List<Map<String, Object>>>> highlights = new ConcurrentHashMap<>();
     private static final List<String> HIGHLIGHTS = Arrays.asList("npcs", "players", "objects", "items");
@@ -90,7 +109,7 @@ final class ExternalMarks
         boolean of(List<Map<String, Object>> list, int plane) { return from == list && this.plane == plane; }
     }
 
-    void clear() { tiles.clear(); highlights.clear(); pies.clear(); lines.clear(); texts.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
+    void clear() { tiles.clear(); highlights.clear(); pies.clear(); lines.clear(); texts.clear(); boards.clear(); tileMarkers.clear(); pieMarkers.clear(); lineMarkers.clear(); }
 
     @Subscribe
     public void onProfileChanged(ProfileChanged event) { clear(); }
@@ -108,6 +127,7 @@ final class ExternalMarks
     }
 
     @Subscribe
+    @SuppressWarnings("unchecked")
     public void onPluginMessage(PluginMessage message)
     {
         Map<String, Object> data = message.getData();
@@ -122,9 +142,20 @@ final class ExternalMarks
                 break;
             case "pies": pies.put(owner, entries(data.get("pies"))); pieMarkers.remove(owner); break;
             case "texts": texts.put(owner, entries(data.get("texts"))); break;
+            case "boards": boards.put(owner, entries(data.get("boards"))); break;
+            case "hello":
+                // A collection the sender cannot add to tells it nothing: its own matter.
+                if (data.get("kinds") instanceof Collection)
+                {
+                    // board-text-style: a board's text takes a font and size of its own. board-overhead: a board can
+                    // hang on the game's own overhead point (overhead).
+                    try { Collection<Object> kinds = (Collection<Object>) data.get("kinds"); kinds.addAll(KINDS); kinds.add("board-text-style"); kinds.add("board-overhead"); }
+                    catch (UnsupportedOperationException ignored) { }
+                }
+                break;
             case "lines": lines.put(owner, lines(data.get("lines"))); lineMarkers.remove(owner); break;
             case "clear":
-                tiles.remove(owner); pies.remove(owner); lines.remove(owner); texts.remove(owner);
+                tiles.remove(owner); pies.remove(owner); lines.remove(owner); texts.remove(owner); boards.remove(owner);
                 for (Map<String, List<Map<String, Object>>> kind : highlights.values()) { kind.remove(owner); }
                 tileMarkers.remove(owner); pieMarkers.remove(owner); lineMarkers.remove(owner);
                 break;
@@ -235,6 +266,106 @@ final class ExternalMarks
                 }
             }
         }
+    }
+
+    /**
+     * The boards of the moment, where they stand at this game step: called once a client tick, which is also when a
+     * gliding board notes its character's place (nanos: System.nanoTime of the step).
+     */
+    List<Board> boards(long nanos)
+    {
+        WorldView wv = client.getTopLevelWorldView();
+        if (wv == null || boards.isEmpty()) { glides.clear(); return Collections.emptyList(); }
+        int plane = wv.getPlane();
+        List<Board> out = new ArrayList<>();
+        Set<String> gliding = new HashSet<>();
+        for (Map.Entry<String, List<Map<String, Object>>> owner : boards.entrySet())
+        {
+            int n = 0;
+            for (Map<String, Object> t : owner.getValue())
+            {
+                for (Place at : places(wv, t))
+                {
+                    String key = "ext:" + owner.getKey() + ":board:" + n++;
+                    if (at.plane != plane && at.actor == null) { continue; }
+                    Board.Glide glide = null;
+                    if (at.actor != null && Boolean.TRUE.equals(t.get("glide")) && !Boolean.TRUE.equals(t.get("overhead")))
+                    {
+                        glide = glides.computeIfAbsent(key, k -> new Board.Glide());
+                        glide.step(at.point.getX(), at.point.getY(), nanos);
+                        gliding.add(key);
+                    }
+                    Board b = board(key, at, glide, t);
+                    if (b != null) { out.add(b); }
+                }
+            }
+        }
+        glides.keySet().retainAll(gliding);
+        return out;
+    }
+
+    /** A board from its map: its rectangles and texts that have all they need; null when none has. */
+    private static Board board(String key, Place at, Board.Glide glide, Map<String, Object> t)
+    {
+        List<float[]> rects = new ArrayList<>(), textAt = new ArrayList<>();
+        List<Color> colors = new ArrayList<>(), textColors = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        List<Integer> textSizes = new ArrayList<>();
+        List<HdWorldMarkersConfig.TextFont> textFonts = new ArrayList<>();
+        List<Integer> textEdges = new ArrayList<>();
+        if (t.get("rects") instanceof Collection)
+        {
+            for (Object o : (Collection<?>) t.get("rects"))
+            {
+                if (!(o instanceof Map) || rects.size() >= MAX_BOARD_RECTS) { continue; }
+                Map<?, ?> r = (Map<?, ?>) o;
+                Color color = color(r.get("color"), null);
+                float w = decimal(r.get("width"), 0), h = decimal(r.get("height"), 0);
+                if (color == null || !(w > 0) || !(h > 0)) { continue; }
+                rects.add(new float[]{decimal(r.get("x"), 0), decimal(r.get("y"), 0), w, h});
+                colors.add(color);
+            }
+        }
+        if (t.get("texts") instanceof Collection)
+        {
+            for (Object o : (Collection<?>) t.get("texts"))
+            {
+                if (!(o instanceof Map) || texts.size() >= MAX_BOARD_TEXTS) { continue; }
+                Map<?, ?> r = (Map<?, ?>) o;
+                Color color = color(r.get("color"), null);
+                if (color == null || !(r.get("text") instanceof String) || ((String) r.get("text")).isEmpty()) { continue; }
+                texts.add((String) r.get("text"));
+                textAt.add(new float[]{decimal(r.get("x"), 0), decimal(r.get("y"), 0)});
+                textColors.add(color);
+                textSizes.add(Math.max(0, Math.min(MAX_BOARD_TEXT_SIZE, Math.round(decimal(r.get("size"), 0)))));
+                textFonts.add(textFont(r.get("font")));
+                textEdges.add(Math.max(0, Math.min(MAX_BOARD_TEXT_EDGE, Math.round(decimal(r.get("edge"), 0)))));
+            }
+        }
+        if (rects.isEmpty() && texts.isEmpty()) { return null; }
+        float[] flat = new float[rects.size() * 4], at2 = new float[texts.size() * 2];
+        for (int i = 0; i < rects.size(); i++) { System.arraycopy(rects.get(i), 0, flat, i * 4, 4); }
+        for (int i = 0; i < texts.size(); i++) { System.arraycopy(textAt.get(i), 0, at2, i * 2, 2); }
+        Board made = new Board(key, at.point, at.plane, decimal(t.get("height"), at.lift), at.actor, glide, !Boolean.FALSE.equals(t.get("snap")),
+            at.actor != null && Boolean.TRUE.equals(t.get("overhead")),
+            flat, colors.toArray(new Color[0]), texts.toArray(new String[0]), at2, textColors.toArray(new Color[0]),
+            textSizes.stream().mapToInt(Integer::intValue).toArray(), textFonts.toArray(new HdWorldMarkersConfig.TextFont[0]));
+        made.textEdges = textEdges.stream().mapToInt(Integer::intValue).toArray();
+        return made;
+    }
+
+    /** A board text's own font by its name (as in the Text settings: SMOOTH_BOLD); null for none or an unknown one. */
+    private static HdWorldMarkersConfig.TextFont textFont(Object value)
+    {
+        if (!(value instanceof String)) { return null; }
+        try { return HdWorldMarkersConfig.TextFont.valueOf(((String) value).trim().toUpperCase(java.util.Locale.ROOT)); }
+        catch (IllegalArgumentException e) { return null; }
+    }
+
+    private static float decimal(Object value, float fallback)
+    {
+        float f = value instanceof Number ? ((Number) value).floatValue() : fallback;
+        return Float.isNaN(f) || Float.isInfinite(f) ? fallback : f;
     }
 
     /** The markers on the floor you are on, as for your own marks: another floor's would float over this one. */

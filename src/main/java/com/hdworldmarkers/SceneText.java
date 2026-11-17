@@ -31,15 +31,29 @@ final class SceneText
         final Color edgeColor;
         /** The shadow's offset and the outline's width, in canvas pixels: one at RuneLite's size 16. */
         final int edgeWidth;
+        /** Whether the edge width was asked for by a board text (a solid shadow) rather than from the size. */
+        final boolean own;
         /** RuneScape's pixel fonts get square outline corners, as RuneLite's outlined text. */
         final boolean pixel;
+        /** What it was made from: a board text with a size or font of its own takes the rest from it. */
+        final HdWorldMarkersConfig.TextFont kind;
+        final int size;
 
         Style(HdWorldMarkersConfig.TextFont font, int size, HdWorldMarkersConfig.TextEdge edge, Color edgeColor)
         {
+            this(font, size, edge, edgeColor, 0);
+        }
+
+        /** @param width the edge's width in canvas pixels; 0 = from the size (one at 16) */
+        Style(HdWorldMarkersConfig.TextFont font, int size, HdWorldMarkersConfig.TextEdge edge, Color edgeColor, int width)
+        {
+            kind = font;
+            this.size = size;
             this.font = font(font, size);
             this.edge = edge;
             this.edgeColor = edgeColor;
-            edgeWidth = Math.max(1, Math.round(size / 16f));
+            own = width > 0;
+            edgeWidth = width > 0 ? width : Math.max(1, Math.round(size / 16f));
             pixel = font != HdWorldMarkersConfig.TextFont.SMOOTH && font != HdWorldMarkersConfig.TextFont.SMOOTH_BOLD;
         }
 
@@ -113,7 +127,24 @@ final class SceneText
             Area around = null;
             if (style.edge == HdWorldMarkersConfig.TextEdge.SHADOW)
             {
-                around = glyph.createTransformedArea(AffineTransform.getTranslateInstance(style.edgeWidth, style.edgeWidth));
+                // One solid shadow: the glyph moved by 1 .. edgeWidth pixels, so a wider one has no gaps.
+                around = new Area();
+                if (!style.own)
+                {
+                    around.add(glyph.createTransformedArea(AffineTransform.getTranslateInstance(style.edgeWidth, style.edgeWidth)));
+                }
+                else
+                {
+                    // A board text with an edge width of its own: every step down and right up to it, so thin strokes keep a
+                    // connected shadow (a lone diagonal copy leaves loose bits of it).
+                    for (int dx = 0; dx <= style.edgeWidth; dx++)
+                    {
+                        for (int dy = 0; dy <= style.edgeWidth; dy++)
+                        {
+                            if (dx + dy > 0) { around.add(glyph.createTransformedArea(AffineTransform.getTranslateInstance(dx, dy))); }
+                        }
+                    }
+                }
             }
             else if (style.edge == HdWorldMarkersConfig.TextEdge.OUTLINE)
             {
