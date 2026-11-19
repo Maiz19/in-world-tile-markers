@@ -6,7 +6,6 @@ import java.awt.Color;
 import java.awt.Shape;
 import java.util.*;
 import java.util.Deque;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -78,6 +77,18 @@ final class SceneShapeRenderer
     private volatile ExecutorService workers;
     /** Scratch for traces per worker task of a frame (see computeAll); the client thread's is silhouetteScratch. */
     private final Silhouette.Scratch[] workerScratch = new Silhouette.Scratch[MAX_WORKERS];
+    /**
+     * Chains a worker took in an earlier frame and still computes: the client thread does not wait for them. Until they
+     * are done their projections are left alone and their targets drawn as last time (see models). Client thread only.
+     */
+    private final List<Job> pending = new ArrayList<>();
+    private final Set<Projection> busy = Collections.newSetFromMap(new IdentityHashMap<>());
+    /** The jobs drawn per target key this frame and the last: one of a busy projection is drawn again. */
+    private Map<String, Job> drawnJobs = new HashMap<>(), lastDrawnJobs = new HashMap<>();
+    /** A trace that failed on a worker, thrown on the client thread by the next frame that draws models. */
+    private final AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+    /** For tests: run on a worker after it took a chain, before it computes it; null in the plugin. */
+    volatile Runnable workerTook;
 
     /** Models no scene object uses now, kept for the next ones: making and uploading a model costs. */
     private final Deque<Spare> spareCarriers = new ArrayDeque<>();
@@ -206,6 +217,9 @@ final class SceneShapeRenderer
         List<float[]> polygons;
         /** The next job of the same projection and kind, computed after this one on the same thread (see models). */
         Job next;
+        /** The first job of its chain (null: computed by none); in that, whether the chain is done (see computeAll). */
+        Job head;
+        volatile boolean done;
     }
     private final Silhouette.Scratch silhouetteScratch = new Silhouette.Scratch();
     private final ScreenOutline outline = new ScreenOutline();
@@ -851,16 +865,36 @@ final class SceneShapeRenderer
      * Draws the targets as model does, in their order, but first computes all their traces, outline regions and
      * clickboxes (most of a frame with NPCs marked) on the workers and the client thread at once. The client is only
      * read on the client thread (prepare, finish); one projection's outlines, and its clickboxes, are computed one after
-     * another on one thread, in their order, as model computes them.
+     * another on one thread, in their order, as model computes them. The client thread never waits for a worker: a
+     * target whose chain a worker still computes at the end of the frame is drawn as it was last frame (see computeAll),
+     * and its projection left to that worker until it is done.
      */
     void models(List<ModelTarget> targets)
     {
-        ExecutorService pool = workers;
+        // Chains the workers finished since are the client thread's again (done is set after the chain's last write).
+        pending.removeIf(c -> c.done);
+        busy.clear();
+        for (Job c : pending) { busy.add(c.p); }
+        Map<String, Job> swap = lastDrawnJobs;
+        lastDrawnJobs = drawnJobs;
+        drawnJobs = swap;
+        drawnJobs.clear();
+        // While a worker still computes, this frame is all the client thread's: no worker's scratch is used by two at once.
+        ExecutorService pool = pending.isEmpty() ? workers : null;
         int threads = pool == null ? 1 : workerCount + 1;
         List<Job> jobs = new ArrayList<>(targets.size()), chains = new ArrayList<>(), own = new ArrayList<>();
         Map<Projection, Job[]> last = new IdentityHashMap<>();
         for (ModelTarget t : targets)
         {
+            Projection mine = busy.isEmpty() ? null : existingProjection(t);
+            if (mine != null && busy.contains(mine))
+            {
+                // Kept with the models drawn this frame; drawn as last time.
+                mine.frame = frame;
+                Job before = lastDrawnJobs.get(t.key);
+                if (before != null) { jobs.add(before); }
+                continue;
+            }
             Job j = prepare(t, threads);
             if (j == null) { continue; }
             jobs.add(j);
@@ -869,35 +903,47 @@ final class SceneShapeRenderer
             int kind = j.box ? 1 : 0;
             // An outline over much of the screen is traced on this thread: its scratch is large, and every worker that
             // traced one would keep as much.
-            if (tail[kind] == null) { (kind == 0 && j.p.width * j.p.height2d > WORKER_CELLS ? own : chains).add(j); } else { tail[kind].next = j; }
+            if (tail[kind] == null) { j.head = j; (kind == 0 && j.p.width * j.p.height2d > WORKER_CELLS ? own : chains).add(j); }
+            else { tail[kind].next = j; j.head = tail[kind].head; }
             tail[kind] = j;
         }
         computeAll(chains, own, pool, threads);
-        for (Job j : jobs) { finish(j); }
+        Throwable failed = workerFailure.getAndSet(null);
+        if (failed != null) { Throwables.throwIfUnchecked(failed); throw new IllegalStateException(failed); }
+        for (Job j : jobs)
+        {
+            Job drawn = j.head == null || j.head.done ? j : lastDrawnJobs.get(j.t.key);
+            if (drawn == null) { continue; }
+            finish(drawn);
+            drawnJobs.put(drawn.t.key, drawn);
+        }
     }
 
     /**
      * Computes the chains (a job and its next ones), taken one at a time by the workers and this thread, which first
-     * computes its own, and returns when all are done, throwing the first failure. Only chains a worker took are waited for: one that never started
-     * (busy, or stopped with the plugin) finds none left, so it cannot hold up the frame.
+     * computes its own, until none is left. It does not wait for the chains a worker took: those not done yet are left
+     * pending (see models), the first failure kept for the client thread. A worker that never started (busy, or stopped
+     * with the plugin) finds no chain left, so it cannot hold up the frame.
      */
     private void computeAll(List<Job> chains, List<Job> own, ExecutorService pool, int threads)
     {
-        AtomicInteger next = new AtomicInteger(), left = new AtomicInteger(chains.size());
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        CompletableFuture<Void> done = new CompletableFuture<>();
+        AtomicInteger next = new AtomicInteger();
+        AtomicReference<Throwable> failure = workerFailure;
         Consumer<Silhouette.Scratch> take = scratch -> {
             for (int i; (i = next.getAndIncrement()) < chains.size(); )
             {
-                try { for (Job j = chains.get(i); j != null; j = j.next) { compute(j, scratch); } }
+                Job c = chains.get(i);
+                Runnable took = workerTook;
+                if (took != null && scratch != silhouetteScratch) { took.run(); }
+                try { for (Job j = c; j != null; j = j.next) { compute(j, scratch); } }
                 catch (RuntimeException | Error ex) { failure.compareAndSet(null, ex); }
-                finally { if (left.decrementAndGet() == 0) { done.complete(null); } }
+                finally { c.done = true; }
             }
         };
         try
         {
-            // A task's scratch is used only while it computes a chain, so never by two at once: a task of an earlier frame
-            // that starts late finds no chain.
+            // A task's scratch is used only while it computes a chain, and no frame hands out chains while one is pending:
+            // a task of an earlier frame that starts late finds no chain.
             for (int w = 0; w < Math.min(threads, chains.size()) - 1; w++)
             {
                 Silhouette.Scratch scratch = workerScratch[w] == null ? (workerScratch[w] = new Silhouette.Scratch()) : workerScratch[w];
@@ -910,16 +956,16 @@ final class SceneShapeRenderer
         }
         finally
         {
-            // Also when a worker could not be started at all: no chain may be left to a worker after this frame.
+            // Also when a worker could not be started at all: no chain is left untaken after this frame.
             for (Job c : own)
             {
                 try { for (Job j = c; j != null; j = j.next) { compute(j, silhouetteScratch); } }
                 catch (RuntimeException | Error ex) { failure.compareAndSet(null, ex); }
+                finally { c.done = true; }
             }
             take.accept(silhouetteScratch);
-            if (!chains.isEmpty()) { done.join(); }
+            for (Job c : chains) { if (!c.done) { pending.add(c); } }
         }
-        if (failure.get() != null) { Throwables.throwIfUnchecked(failure.get()); }
     }
 
     /**
@@ -1111,6 +1157,14 @@ final class SceneShapeRenderer
         ensure(h);
         for (int i = 0; i < h; i++) { px[i] = polygon[i * 2]; py[i] = polygon[i * 2 + 1]; pd[i] = depth; }
         return h;
+    }
+
+    /** The target's projection as projection finds it, without making one; null when there is none. */
+    private Projection existingProjection(ModelTarget t)
+    {
+        Projection p = projections.get(t.actor != null ? t.actor : t.object);
+        while (p != null && p.part != t.renderable) { p = p.next; }
+        return p;
     }
 
     /**
@@ -2027,6 +2081,11 @@ final class SceneShapeRenderer
         stages.clear();
         silhouetteScratch.bits = new long[0];
         Arrays.fill(workerScratch, null);
+        // A chain a worker still computes keeps its own scratch and projection, both dropped here.
+        pending.clear();
+        busy.clear();
+        drawnJobs.clear();
+        lastDrawnJobs.clear();
         projections.clear();
         appended.clear();
     }
@@ -2046,7 +2105,7 @@ final class SceneShapeRenderer
         workers = Executors.newFixedThreadPool(workerCount, new ThreadFactoryBuilder().setNameFormat("hd-world-markers-%d").setDaemon(true).build());
     }
 
-    /** Stops the workers, with the plugin: a frame computing finishes on the client thread (see computeAll). */
+    /** Stops the workers, with the plugin: a chain a worker took is finished by it, the rest of a frame by the client thread (see computeAll). */
     void stopWorkers()
     {
         ExecutorService pool = workers;
