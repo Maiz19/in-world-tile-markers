@@ -59,16 +59,30 @@ final class PlayerSilhouette
             System.arraycopy(model.getFaceIndices3(), 0, c, 0, faces);
             int[] colors = model.getFaceColors3();
             byte[] alpha = model.getFaceTransparencies();
+            short[] textures = model.getFaceTextures();
             for (int f = 0; f < faces; f++)
             {
                 // Not drawn: hidden faces, and nearly see-through ones, which Improved Tile Indicators leaves too.
                 skip[f] = colors != null && f < colors.length && colors[f] == -2 || alpha != null && f < alpha.length && (alpha[f] & 255) >= 254
-                    || a[f] < 0 || b[f] < 0 || c[f] < 0 || a[f] >= n || b[f] >= n || c[f] >= n;
+                    || a[f] < 0 || b[f] < 0 || c[f] < 0 || a[f] >= n || b[f] >= n || c[f] >= n
+                    || groundShadow(alpha, textures, f);
                 if (skip[f]) { a[f] = b[f] = c[f] = 0; }
             }
             this.localX = localX; this.localY = localY; this.height = height; this.orientation = orientation;
             margin = IN_FRONT;
             return true;
+        }
+
+        /**
+         * A shadow baked into the model (2026-11-20: the tile line was gone in a wide box around the feet): a flat,
+         * mostly see-through, untextured face at the ground, as 117 HD tells them (HDUtils.isBakedGroundShading) and
+         * leaves them out. Without 117 HD it is a faint shade on the ground: no part of the actor to cut around either.
+         */
+        private boolean groundShadow(byte[] alpha, short[] textures, int f)
+        {
+            if (alpha == null || f >= alpha.length || (alpha[f] & 255) <= 100 || textures != null && f < textures.length && textures[f] != -1) { return false; }
+            float h = y[a[f]];
+            return h >= -8 && h == y[b[f]] && h == y[c[f]];
         }
 
         /** Room for n points and this many faces. */
