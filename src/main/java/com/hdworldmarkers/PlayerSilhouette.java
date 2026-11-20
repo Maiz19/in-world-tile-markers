@@ -119,6 +119,37 @@ final class PlayerSilhouette
             {
                 hidden[f] = skip[f] || !both && !Silhouette.front(px, py, a[f], b[f], c[f]);
             }
+            bound();
+        }
+
+        /** The canvas box of its projected points and their most 1 / depth; unbounded when a face is cut at NEAR (see polygon). */
+        float minX, minY, maxX, maxY, mostInverse;
+        boolean unbounded;
+
+        private void bound()
+        {
+            minX = minY = Float.POSITIVE_INFINITY; maxX = maxY = Float.NEGATIVE_INFINITY; mostInverse = 0; unbounded = false;
+            for (int i = 0; i < n; i++)
+            {
+                float d = pd[i];
+                // Points left out (behind the camera) leave their faces out too (polygon); one nearer than NEAR cuts its
+                // faces there, at points this box does not hold.
+                if (Float.isNaN(px[i]) || !(d > 0)) { continue; }
+                if (d < NEAR) { unbounded = true; return; }
+                minX = Math.min(minX, px[i]); maxX = Math.max(maxX, px[i]); minY = Math.min(minY, py[i]); maxY = Math.max(maxY, py[i]);
+                mostInverse = Math.max(mostInverse, 1 / d);
+            }
+        }
+
+        /**
+         * Whether none of its faces can come nearer than 1 / depth limit (see passed), or reach a cell of a raster of w
+         * by h cells at (ox, oy) in this scale: then each face would be passed over one by one.
+         */
+        boolean passedWhole(float limit, float ox, float oy, float scale, int w, int h)
+        {
+            if (unbounded) { return false; }
+            if (limit > 0 && mostInverse * (1 + ROUNDING) <= limit) { return true; }
+            return (maxX - ox) * scale < -2 || (maxY - oy) * scale < -2 || (minX - ox) * scale > w + 2 || (minY - oy) * scale > h + 2;
         }
     }
 
@@ -344,6 +375,8 @@ final class PlayerSilhouette
      */
     private static void reach(Shape s, ModelShapes.Camera cam, float limit, float ox, float oy, float scale, int[] box)
     {
+        // A wall or object wholly beyond the limit, or left of or above the raster, grows the box by no cell.
+        if (s.passedWhole(limit, ox, oy, scale, Integer.MAX_VALUE / 4, Integer.MAX_VALUE / 4)) { return; }
         float[] poly = new float[12], view = new float[9];
         int[] v = new int[3];
         for (int f = 0; f < s.faces; f++)
@@ -382,6 +415,8 @@ final class PlayerSilhouette
      */
     private void cover(Shape s, Cells cells, float ox, float oy, float scale, float limit, int mode, float margin, float fallback)
     {
+        // A wall or object wholly beyond the limit or off the raster covers no cell: its faces are not visited one by one.
+        if (s.passedWhole(limit, ox, oy, scale, cells.w, cells.h)) { return; }
         ModelShapes.Camera cam = camera;
         float[] poly = new float[12], view = new float[9];
         int[] v = new int[3];

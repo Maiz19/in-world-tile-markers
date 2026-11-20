@@ -90,6 +90,15 @@ final class MarkerSources
      */
     private List<Marker> groundMarkers;
     private List<Object> groundOptions;
+    /**
+     * Of groundMarkers, those collect draws: within the draw distance of nearOrigin (you), on their scene's floor, at
+     * most the nearest MAX_TILES; kept while the markers, your place, the distance and those floors stay the same.
+     * nearViews / nearPlanes: the scenes of the markers and their floor then (-1: none).
+     */
+    private List<Marker> near, nearFrom;
+    private LocalPoint nearOrigin;
+    private int nearDistance;
+    private int[] nearViews = new int[0], nearPlanes = new int[0];
     /** Your lines in the scene, and as markers (each keeps its own colour and width), made once per rebuild. */
     private final List<Placed<LinePoint>> lineMarks = new ArrayList<>();
     private List<Marker> lineMarkers;
@@ -457,9 +466,9 @@ final class MarkerSources
         visible = null;
         frontNpcs = null;
         pass = null;
-        List<Marker> result = new ArrayList<>(groundMarkers());
         Player player = client.getLocalPlayer();
         if (player == null) { return new ArrayList<>(); }
+        List<Marker> result = new ArrayList<>(nearGround(player.getLocalLocation()));
         result.addAll(lineMarkers());
         WorldView playerWorld = player.getWorldView();
         int plane = playerWorld.getPlane();
@@ -553,6 +562,48 @@ final class MarkerSources
         if (interacting.isEmpty()) { return; }
         targets.removeIf(t -> interacting.stream().anyMatch(i -> i.outline == t.outline && i.clickbox == t.clickbox
             && (i.actor != null ? i.actor == t.actor : i.object != null && i.object == t.object && i.renderable == t.renderable)));
+    }
+
+    /**
+     * The marked tiles collect draws (see near): those of groundMarkers that its distance and floor test keeps, at most
+     * the nearest MAX_TILES (HdWorldMarkersPlugin.nearest of all marks then picks the same). With Tile Packs there are
+     * thousands, tested and sorted every client tick while nothing changed.
+     */
+    private List<Marker> nearGround(LocalPoint origin)
+    {
+        List<Marker> all = groundMarkers();
+        int distance = drawDistance(config);
+        if (all == nearFrom && distance == nearDistance && origin.equals(nearOrigin) && samePlanes()) { return near; }
+        List<Marker> kept = new ArrayList<>();
+        int[] views = new int[0], planes = new int[0];
+        for (Marker m : all)
+        {
+            int id = m.point.getWorldView(), k = 0;
+            while (k < views.length && views[k] != id) { k++; }
+            if (k == views.length)
+            {
+                WorldView wv = client.getWorldView(id);
+                views = Arrays.copyOf(views, k + 1); planes = Arrays.copyOf(planes, k + 1);
+                views[k] = id; planes[k] = wv == null ? -1 : wv.getPlane();
+            }
+            // As collect's own test: on its scene's floor, not invisible, within the draw distance of you.
+            if (planes[k] < 0 || m.plane != planes[k] || m.color.getAlpha() == 0 && m.fill.getAlpha() == 0
+                || id == origin.getWorldView() && m.point.distanceTo(origin) > distance) { continue; }
+            kept.add(m);
+        }
+        nearFrom = all; nearDistance = distance; nearOrigin = origin; nearViews = views; nearPlanes = planes;
+        return near = HdWorldMarkersPlugin.nearest(kept, origin, HdWorldMarkersPlugin.MAX_TILES);
+    }
+
+    /** Whether the scenes of the marked tiles are on the floors near was found for. */
+    private boolean samePlanes()
+    {
+        for (int k = 0; k < nearViews.length; k++)
+        {
+            WorldView wv = client.getWorldView(nearViews[k]);
+            if ((wv == null ? -1 : wv.getPlane()) != nearPlanes[k]) { return false; }
+        }
+        return true;
     }
 
     /** The marked tiles as markers in the tile options of the moment, made again only when those or the tiles changed. */

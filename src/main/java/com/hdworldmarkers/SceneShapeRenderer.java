@@ -179,6 +179,14 @@ final class SceneShapeRenderer
         /** The projected bounding box's convex hull (clickbox bounds), or null; and the clickbox from it. */
         float[] boundsHull;
         List<float[]> clickbox;
+        /**
+         * The last clickbox made, the frame and the projected points' bounds it was made for, and what making it took:
+         * over the budget it is moved along rather than made again, as an outline's last trace (see prepare).
+         */
+        List<float[]> boxed;
+        int boxedFrame, boxedViewport;
+        float boxedCenterX, boxedCenterY, boxedWidth, boxedHeight;
+        long boxNanos = 300_000;
         int frame, facesFrame, localX, localY, height, orientation;
         ModelShapes.Camera camera;
         /** The previous projection's points, kept to see whether a new one came out the same (see project). */
@@ -1019,6 +1027,26 @@ final class SceneShapeRenderer
             else { j.asHull = true; }
         }
         j.box = t.clickbox && !twoModels(t.object);
+        if (j.box && projected.clickbox == null && !projected.boundingBox)
+        {
+            // Clickboxes share the outlines' budget: over it the last clickbox, at most a few frames old, is moved to
+            // where the model is now (making one costs about as much as a trace in a crowd).
+            if (outlineNanos / threads > outlineBudget && projected.boxed != null && frame - projected.boxedFrame <= STALE_OUTLINE_FRAMES
+                && projected.boxedViewport == projected.viewport)
+            {
+                j.box = false;
+                j.polygons = moved(projected.boxed, projected.boxedCenterX, projected.boxedCenterY, projected.boxedWidth,
+                    projected.boxedHeight, projected.centerX, projected.centerY, projected.width, projected.height2d);
+            }
+            else
+            {
+                outlineNanos += projected.boxNanos;
+                projected.boxedFrame = frame;
+                projected.boxedViewport = projected.viewport;
+                projected.boxedCenterX = projected.centerX; projected.boxedCenterY = projected.centerY;
+                projected.boxedWidth = projected.width; projected.boxedHeight = projected.height2d;
+            }
+        }
         if (j.box)
         {
             // Faces the clickbox may need are copied here, from the client's model (see clickbox).
@@ -1035,7 +1063,13 @@ final class SceneShapeRenderer
     private static void compute(Job j, Silhouette.Scratch scratch)
     {
         Projection projected = j.p;
-        if (j.box) { j.polygons = clickbox(projected, j.viewX, j.viewWidth, j.viewHeight); }
+        if (j.box)
+        {
+            boolean make = projected.clickbox == null && !projected.boundingBox;
+            long boxStart = make ? System.nanoTime() : 0;
+            j.polygons = clickbox(projected, j.viewX, j.viewWidth, j.viewHeight);
+            if (make) { projected.boxed = j.polygons; projected.boxNanos = System.nanoTime() - boxStart; }
+        }
         if (!j.t.outline || j.asHull) { return; }
         long start = System.nanoTime();
         if (j.trace)
@@ -2397,14 +2431,25 @@ final class SceneShapeRenderer
         /** Writes nf faces (vertex indices, with the colour and alpha of their source face or their own) and hides the rest. */
         void writeFaces(Model m, int nf, int[] a, int[] b, int[] c, int[] source, int[] colors, int[] alphas)
         {
+            // The model's arrays fetched once, not per face (as FlatModel.paint and hide do, face by face).
             int[] i1 = m.getFaceIndices1(), i2 = m.getFaceIndices2(), i3 = m.getFaceIndices3();
+            int[] c1 = m.getFaceColors1(), c2 = m.getFaceColors2(), c3 = m.getFaceColors3();
+            byte[] transparencies = m.getFaceTransparencies();
+            short[] unlit = m.getUnlitFaceColors();
             for (int f = 0; f < nf; f++)
             {
-                int s = source == null ? f : source[f];
+                int s = source == null ? f : source[f], hsl = colors[s], alpha = alphas[s];
                 i1[f] = a[f]; i2[f] = b[f]; i3[f] = c[f];
-                FlatModel.paint(m, f, colors[s], alphas[s]);
+                c1[f] = hsl; c2[f] = hsl;
+                c3[f] = alpha == 0 ? -2 : hsl;
+                if (transparencies != null) { transparencies[f] = (byte) (255 - alpha); }
+                if (unlit != null) { unlit[f] = (short) hsl; }
             }
-            for (int f = nf; f < usedFaces; f++) { FlatModel.hide(m, f); }
+            for (int f = nf; f < usedFaces; f++)
+            {
+                i1[f] = 0; i2[f] = 0; i3[f] = 0; c3[f] = -2;
+                if (transparencies != null) { transparencies[f] = (byte) 255; }
+            }
             usedFaces = nf;
         }
 

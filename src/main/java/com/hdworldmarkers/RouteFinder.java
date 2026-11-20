@@ -52,14 +52,17 @@ class RouteFinder
     private int baseX, baseY, plane;
     /**
      * The extended scene as collision flags (ext[sceneX + extOffset][sceneY + extOffset]), approximated from its tiles;
-     * EXT_UNKNOWN where no tile is loaded; null without an extended scene. Made again when the scene, area or level
-     * changes, and every EXT_AGE loads (doors open and close).
+     * EXT_UNKNOWN where no tile is loaded; null without an extended scene. Made only when a walk beyond the loaded area
+     * needs it (see extended()), again when the scene, area or level changed or it is EXT_AGE game ticks old (doors
+     * open and close): scanning its tiles took a hitch of a few ms, every 10 seconds, while no walk needed it.
      */
     private int[][] ext;
-    private int extOffset, extAge;
+    private int extOffset, extTick, ticks;
     private Object extScene;
     private int extBaseX, extBaseY, extPlane;
-    private static final int EXT_UNKNOWN = -2, EXT_AGE = 500;
+    /** The world view last loaded, whose extended scene is not looked at yet; null once it is (see extended()). */
+    private WorldView extView;
+    private static final int EXT_UNKNOWN = -2, EXT_AGE = 16;
     /** The client walks nowhere within this many tiles of the loaded area's edge; beyond it, the extended view decides. */
     private static final int BORDER = 6;
     /** While set (findBeyond, stepBeyond), the border and everything beyond take the extended view's flags. */
@@ -85,8 +88,17 @@ class RouteFinder
         baseY = wv.getBaseY();
         if (scanNodes) { scan(wv); }
         if (closedStale || baseX != closedBaseX || baseY != closedBaseY || plane != closedPlane) { closeDoorways(); }
-        extended(wv);
+        extView = wv;
         return true;
+    }
+
+    /** A game tick passed: the extended scene ages by game ticks (see ext). */
+    void gameTick() { ticks++; }
+
+    /** Makes the extended scene of the world view last loaded, when it is not made for it yet or too old. */
+    private void extended()
+    {
+        if (extView != null) { WorldView wv = extView; extView = null; extended(wv); }
     }
 
     /** Notes a Gauntlet node that is not lit: its doorway is closed. */
@@ -171,9 +183,9 @@ class RouteFinder
         Scene scene = wv.getScene();
         Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
         if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane].length <= flags.length) { ext = null; extScene = null; return; }
-        boolean same = scene == extScene && baseX == extBaseX && baseY == extBaseY && plane == extPlane;
-        if (same && ++extAge < EXT_AGE) { return; }
-        extAge = 0; extScene = scene; extBaseX = baseX; extBaseY = baseY; extPlane = plane;
+        boolean same = scene == extScene && baseX == extBaseX && baseY == extBaseY && plane == extPlane && ext != null;
+        if (same && ticks - extTick < EXT_AGE) { return; }
+        extTick = ticks; extScene = scene; extBaseX = baseX; extBaseY = baseY; extPlane = plane;
         byte[][][] settings = scene.getExtendedTileSettings();
         int size = tiles[plane].length;
         extOffset = (size - flags.length) / 2;
@@ -255,13 +267,14 @@ class RouteFinder
     }
 
     /** How far the extended view reaches beyond the loaded area, in tiles; 0 without one. */
-    int extent() { return ext == null ? 0 : extOffset; }
+    int extent() { extended(); return ext == null ? 0 : extOffset; }
 
     /** Whether the flags of this tile are known: in the loaded area, or shown by the extended view. */
     boolean known(WorldPoint p)
     {
         int x = p.getX() - baseX, y = p.getY() - baseY;
         if (x >= 0 && y >= 0 && x < flags.length && y < flags[x].length) { return true; }
+        extended();
         int ex = x + extOffset, ey = y + extOffset;
         return ext != null && ex >= 0 && ey >= 0 && ex < ext.length && ey < ext.length && ext[ex][ey] != EXT_UNKNOWN;
     }
@@ -279,6 +292,7 @@ class RouteFinder
     List<WorldPoint> findBeyond(WorldPoint from, Target target)
     {
         borderless = true;
+        extended();
         try { return find(from, target); }
         finally { borderless = false; }
     }
@@ -287,6 +301,7 @@ class RouteFinder
     WorldPoint stepBeyond(WorldPoint at, WorldPoint to)
     {
         borderless = true;
+        extended();
         try { return step(at, to); }
         finally { borderless = false; }
     }

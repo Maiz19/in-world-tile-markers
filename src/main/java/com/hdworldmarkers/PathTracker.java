@@ -325,6 +325,7 @@ final class PathTracker extends Overlay implements KeyListener
 
     @Subscribe public void onGameTick(GameTick e)
     {
+        routes.gameTick();
         Player me = client.getLocalPlayer();
         if (me == null || !routes.load(me.getWorldView())) { return; }
         routes.loadBlockers(me.getWorldView());
