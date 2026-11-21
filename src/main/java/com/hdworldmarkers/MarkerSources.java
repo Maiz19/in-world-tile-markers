@@ -119,8 +119,14 @@ final class MarkerSources
     /** The object or wall the predicted click met, which the walk goes beside as the game's rules say; null: a tile. */
     private RouteFinder.Target predictedObject;
     private long stillSince, arrivedAt, predictedAt;
-    /** Last hitsplat on you or your target; combat lasts COMBAT_MS after it. */
+    /** Last hitsplat that counts as combat (see hitsplat); combat lasts COMBAT_MS after it. */
     private long lastHit;
+    /** Last hitsplat of a fight itself: on your target, or on you with someone to fight. Only these let a later hit on you count. */
+    private long lastFightHit;
+    /** Who your last hit was on: its death ends the fight. */
+    private Actor foe;
+    /** The longest reach of an NPC's attack, in tiles. */
+    private static final int ATTACK_REACH = 10;
     static final long COMBAT_MS = 6000;
     private int predictedTick;
     private boolean predictionConfirmed;
@@ -669,19 +675,61 @@ final class MarkerSources
             scale(config.destinationTileFillColor(), alpha), config.destinationTileBorderWidth(), null)));
     }
 
-    /** Records a hitsplat; hits on you or on what you are interacting with count as combat. */
+    /**
+     * Records a hitsplat. A hit on what you interact with counts as combat; a hit on you only in a fight: you target
+     * something you can attack, an attackable NPC or a player targets you, or a fight's last hit is less than COMBAT_MS
+     * ago (a boss's area damage while you run). A failed pickpocket's stun, poison, a trap or the Wintertodt's cold on
+     * its own is no combat.
+     */
     void hitsplat(Actor target, long now)
     {
         Player player = client.getLocalPlayer();
-        if (player != null && target != null && (target == player || target == player.getInteracting())) { lastHit = now; combatPlayer = null; }
+        if (player == null || target == null) { return; }
+        Actor with = player.getInteracting();
+        // The hit that killed it, after its death was told: the fight is already over (died).
+        if (target instanceof NPC && ((NPC) target).isDead()) { return; }
+        if (target == with) { lastFightHit = now; foe = target; }
+        else if (target == player && (attackable(with) || attackedBy(player, null) || targetedByPlayer(player))) { lastFightHit = now; }
+        else if (target != player || lastFightHit == 0 || now - lastFightHit >= COMBAT_MS) { return; }
+        lastHit = now;
+        combatPlayer = null;
+    }
+
+    /**
+     * Someone died. The one you fight (you interact with it, or your last hit was on it) with nothing else after you:
+     * the fight is over at once, not COMBAT_MS after its last hit. Loot or the next thing you click right after a kill
+     * is highlighted again (the Gauntlet: 14 of 81 object clicks were hidden in those seconds).
+     */
+    void died(Actor actor)
+    {
+        Player player = client.getLocalPlayer();
+        if (player == null || actor == null || actor != foe && actor != player.getInteracting()) { return; }
+        foe = null;
+        if (attackedBy(player, actor) || targetedByPlayer(player)) { return; }
+        lastHit = 0;
+        lastFightHit = 0;
+        combatPlayer = null;
+    }
+
+    /** Another player interacting with you: its hit on you is a fight (following or trading you alone is not). */
+    private static boolean targetedByPlayer(Player player)
+    {
+        WorldView wv = player.getWorldView();
+        if (wv == null) { return false; }
+        for (Player other : wv.players())
+        {
+            if (other != null && other != player && other.getInteracting() == player) { return true; }
+        }
+        return false;
     }
 
     /** Whether Interact highlight is hidden now: in combat, with Hide in combat on. */
     private boolean interactHidden(Player player, long now) { return config.interactHideInCombat() && inCombat(player, now); }
 
     /**
-     * In combat: a recent hitsplat on you or your target, or you and an attackable NPC
-     * interacting with each other. Current state only, nothing is predicted.
+     * In combat: a recent hitsplat on your target or on you in a fight (see hitsplat), or you interacting with
+     * something you can attack. An NPC that has you as its target is no combat by itself: one left behind rooms away
+     * (the Gauntlet) keeps you as its target for minutes; one that attacks hits, also when it misses.
      */
     boolean inCombat(Player player, long now)
     {
@@ -693,14 +741,30 @@ final class MarkerSources
     private boolean fight(Player player, long now)
     {
         if (lastHit != 0 && now - lastHit < COMBAT_MS) { return true; }
-        if (attackable(player.getInteracting())) { return true; }
+        return attackable(player.getInteracting());
+    }
+
+    /**
+     * An attackable NPC interacting with you, near enough to attack: one left behind rooms away (the Gauntlet) keeps
+     * you as its target for minutes.
+     */
+    private static boolean attackedBy(Player player, Actor except)
+    {
         WorldView wv = player.getWorldView();
         if (wv == null) { return false; }
         for (NPC npc : wv.npcs())
         {
-            if (npc != null && npc.getInteracting() == player && attackable(npc)) { return true; }
+            if (npc != null && npc != except && npc.getInteracting() == player && attackable(npc) && near(npc, player)) { return true; }
         }
         return false;
+    }
+
+    /** Within the longest reach of an NPC's attack. */
+    private static boolean near(NPC npc, Player player)
+    {
+        WorldArea area = npc.getWorldArea();
+        WorldPoint at = player.getWorldLocation();
+        return area == null || at == null || area.distanceTo(at) <= ATTACK_REACH;
     }
 
     private static boolean attackable(Actor actor)
@@ -900,6 +964,27 @@ final class MarkerSources
         }
     }
 
+    /**
+     * How far two points lie apart, also one on a boat and one in the main world: through where the boat's point lies in
+     * the main world now. LocalPoint.distanceTo gives the largest int across world views, which took every hull,
+     * outline and clickbox of the main world away while you stood on a boat. Zero when that place is not known.
+     */
+    private int distance(LocalPoint a, LocalPoint b)
+    {
+        if (a.getWorldView() == b.getWorldView()) { return a.distanceTo(b); }
+        LocalPoint mainA = onMainWorld(a), mainB = onMainWorld(b);
+        return mainA == null || mainB == null ? 0 : mainA.distanceTo(mainB);
+    }
+
+    private LocalPoint onMainWorld(LocalPoint p)
+    {
+        WorldView top = client.getTopLevelWorldView();
+        if (top == null) { return null; }
+        if (p.getWorldView() == top.getId()) { return p; }
+        WorldView wv = client.getWorldView(p.getWorldView());
+        return wv == null ? null : SceneShapeRenderer.onMainWorld(top, wv, p.getX(), p.getY(), new float[3]);
+    }
+
     /** Hulls and clickboxes, nearest first. */
     List<ModelTarget> modelTargets()
     {
@@ -953,7 +1038,7 @@ final class MarkerSources
         for (ModelTarget t : result)
         {
             LocalPoint location = t.location();
-            if (location != null) { distances.put(t, location.distanceTo(origin)); }
+            if (location != null) { distances.put(t, origin == null ? 0 : distance(location, origin)); }
         }
         result.removeIf(t -> { Integer d = distances.get(t); return d == null || d > distance; });
         result.sort(Comparator.comparingInt(distances::get));
@@ -1077,7 +1162,7 @@ final class MarkerSources
         visible = null;
     }
     void clear() { visible = null; frontNpcs = null; pass = null; combatPlayer = null; predicted = null; predictedWorld = null; predictionConfirmed = false;
-        lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0;
+        lastPlayerTile = null; lastDestination = null; stillSince = 0; arrivedAt = 0; lastHit = 0; lastFightHit = 0; foe = null;
         ground.clear(); groundMarkers = null; lineMarks.clear(); lineMarkers = null; npcs.clear(); objectMarkers.clear(); agility.clear(); styleNames.clear();
         nameStyles.clear(); npcTags = Collections.emptyMap(); outlinesElsewhere = Collections.emptyList();
         inFront.clear(); inFrontByName.clear(); inFrontNames = Collections.emptyList(); }

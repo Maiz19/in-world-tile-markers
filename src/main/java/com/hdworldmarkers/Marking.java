@@ -569,6 +569,8 @@ final class Marking
     {
         MarkerSources.LinePoint line = lastLine;
         if (line == null || !client.isKeyPressed(KeyCode.KC_SHIFT)) { return e; }
+        // A touchpad or fine wheel sends events of less than a notch (rotation 0): they turned the line back each time.
+        if (e.getWheelRotation() == 0) { e.consume(); return e; }
         HdWorldMarkersConfig.Edge[] edges = HdWorldMarkersConfig.Edge.values();
         HdWorldMarkersConfig.Edge next = edges[(line.edge.ordinal() + (e.getWheelRotation() > 0 ? 1 : edges.length - 1)) % edges.length];
         lastLine = line.turned(next);

@@ -556,7 +556,7 @@ public interface HdWorldMarkersConfig extends Config
     @ConfigItem(keyName = "interactBorderWidth", name = "Border width", description = "Width of the borders", position = 10, section = interactSection)
     default double interactBorderWidth() { return 3; }
 
-    @ConfigItem(keyName = "interactHideInCombat", name = "Hide in combat", description = "No hover or interact highlight while you are in combat (you hit or were hit in the last 6 seconds, or you or an NPC is attacking), nor on NPCs you can attack", position = 11, section = interactSection)
+    @ConfigItem(keyName = "interactHideInCombat", name = "Hide in combat", description = "No hover or interact highlight while you are in combat (you hit, or were hit in a fight, in the last 6 seconds, or you are attacking; a stun, poison or a trap alone is no combat), nor on NPCs you can attack", position = 11, section = interactSection)
     default boolean interactHideInCombat() { return false; }
 
     // Agility, as RuneLite's Agility plugin

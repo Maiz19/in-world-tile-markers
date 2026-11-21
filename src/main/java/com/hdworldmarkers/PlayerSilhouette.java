@@ -47,9 +47,11 @@ final class PlayerSilhouette
         /** Copies the model; false when it has nothing to draw. */
         boolean take(Model model, int localX, int localY, int height, int orientation)
         {
-            n = model.getVerticesCount();
-            faces = model.getFaceCount();
+            // Counted before anything is kept: a model with nothing to draw leaves the last one whole, for an object
+            // that still cuts with it.
+            int n = model.getVerticesCount(), faces = model.getFaceCount();
             if (n <= 0 || faces <= 0) { return false; }
+            this.n = n; this.faces = faces;
             room(n, faces);
             System.arraycopy(model.getVerticesX(), 0, x, 0, n);
             System.arraycopy(model.getVerticesY(), 0, y, 0, n);
@@ -95,8 +97,8 @@ final class PlayerSilhouette
         /** Takes faces given as model points (x, height as y, z) in place, as the ground around an actor; false for none. */
         boolean take(float[] mx, float[] my, float[] mz, int n, int[] fa, int[] fb, int[] fc, int faces)
         {
-            this.n = n; this.faces = faces;
             if (n <= 0 || faces <= 0) { return false; }
+            this.n = n; this.faces = faces;
             room(n, faces);
             System.arraycopy(mx, 0, x, 0, n); System.arraycopy(my, 0, y, 0, n); System.arraycopy(mz, 0, z, 0, n);
             System.arraycopy(fa, 0, a, 0, faces); System.arraycopy(fb, 0, b, 0, faces); System.arraycopy(fc, 0, c, 0, faces);
@@ -206,6 +208,24 @@ final class PlayerSilhouette
         return true;
     }
 
+    /** Raster cells per canvas pixel the silhouette is traced with (see sharpness). */
+    private float cellsPerPixel = 1;
+    /** Finer than this the trace does not go: beyond it a rim is thinner than a screen pixel on any screen in use. */
+    private static final float MAX_CELLS_PER_PIXEL = 4;
+
+    /**
+     * How many screen pixels a canvas pixel takes (stretched mode; 1 without), for the model taken: the scene is drawn
+     * that fine, so the silhouette is traced that fine. With a cell per canvas pixel the cut lay up to a cell and a half
+     * off the actor's edge, 3 to 4 screen pixels of bare ground between the legs and a tile's fill at 2.5 times stretch.
+     */
+    synchronized void sharpness(float screenPixelsPerCanvasPixel)
+    {
+        float cells = Float.isNaN(screenPixelsPerCanvasPixel) ? 1 : Math.max(1, Math.min(MAX_CELLS_PER_PIXEL, screenPixelsPerCanvasPixel));
+        if (cells == cellsPerPixel) { return; }
+        cellsPerPixel = cells;
+        camera = null;
+    }
+
     /** Puts the model taken in the pose it is drawn in (see DrawnPose): its vertices, at least as many as the model's. */
     synchronized void drawnAs(float[] x, float[] y, float[] z)
     {
@@ -248,9 +268,10 @@ final class PlayerSilhouette
         // silhouettes from one raster: the whole one, and the one with what the walls and objects cover left out.
         List<float[]> whole = occluded ? new ArrayList<>() : null;
         List<float[]> seen = Silhouette.trace(body.px, body.py, body.a, body.b, body.c, body.faces, body.hidden, scratch, false,
-            occluded ? this::unseen : null, whole);
+            occluded ? this::unseen : null, whole, cellsPerPixel);
         cut = PlayerCut.of(occluded ? whole : seen);
-        visibleCut = occluded ? PlayerCut.of(seen) : cut;
+        // Nothing of the actor hidden (the usual case, standing on the ground): the trace hands the whole one back.
+        visibleCut = occluded && !(seen.size() == whole.size() && (seen.isEmpty() || seen.get(0) == whole.get(0))) ? PlayerCut.of(seen) : cut;
         return cut;
     }
 
@@ -283,11 +304,11 @@ final class PlayerSilhouette
     }
 
     /**
-     * Leaves the actor's cells out where a wall or object nearer the camera covers them. Only the actor's own cells are
+     * Leaves the actor's cells out where a wall or object nearer the camera covers them; whether any was. Only the actor's own cells are
      * visited (Cells): zoomed in, the ground's faces cover the whole raster, and visiting every cell of it took a few
      * milliseconds a frame (issue 18).
      */
-    private void unseen(long[] bits, int words, int w, int h, float ox, float oy, float scale)
+    private boolean unseen(long[] bits, int words, int w, int h, float ox, float oy, float scale)
     {
         float nearest = 0, farthest = Float.MAX_VALUE;
         for (int i = 0; i < body.n; i++)
@@ -295,7 +316,7 @@ final class PlayerSilhouette
             if (body.pd[i] > 0 && !Float.isNaN(body.px[i])) { float inverse = 1 / body.pd[i]; nearest = Math.max(nearest, inverse); farthest = Math.min(farthest, inverse); }
         }
         // Nothing of the actor projects: no cell is at any depth, none is left out.
-        if (nearest == 0) { return; }
+        if (nearest == 0) { return false; }
         // The faces of walls, objects and ground that come near enough the camera to hide any of the actor: no cell of
         // it has a smaller 1 / depth than its farthest point (less a little for rounding). Zoomed in, the ground behind
         // the actor covers most of the raster; it hides nothing and is not visited at all.
@@ -307,24 +328,100 @@ final class PlayerSilhouette
             Shape s = occluders.shapes.get(i);
             reach(s, camera, hides(least, s.margin), ox, oy, scale, box);
         }
-        if (box[2] < box[0] || box[3] < box[1]) { return; }
+        if (box[2] < box[0] || box[3] < box[1]) { return false; }
         int cells = w * h;
         if (near.length < cells) { near = new float[cells]; }
         Arrays.fill(near, 0, cells, 0);
-        // The actor's depth is only read where those faces lie.
+        // The actor's depth is only read where those faces lie, and of those cells only where one of the faces comes
+        // nearer than the actor does in that row at all (need): the ground under an actor reaches up to its knees on
+        // the canvas and hides its soles at most, and visiting all those cells took most of the time of a cut.
         actorCells.of(bits, words, w, h, box);
+        farthestByRow(h, oy, scale, nearest);
+        if (needFirst.length < h) { needFirst = new int[h * 2]; needLast = new int[h * 2]; }
+        Arrays.fill(needFirst, 0, h, Integer.MAX_VALUE);
+        Arrays.fill(needLast, 0, h, -1);
+        for (int i = 0; i < occluders.count; i++)
+        {
+            Shape s = occluders.shapes.get(i);
+            cover(s, actorCells, ox, oy, scale, hides(least, s.margin), NEED, s.margin, nearest);
+        }
+        boolean any = false;
+        for (int r = 0; r < h; r++)
+        {
+            actorCells.first[r] = Math.max(actorCells.first[r], needFirst[r]); actorCells.last[r] = Math.min(actorCells.last[r], needLast[r]);
+            any |= actorCells.first[r] <= actorCells.last[r];
+        }
+        if (!any) { return false; }
         cover(body, actorCells, ox, oy, scale, 0, NEAREST, 0, 0);
+        cleared = false;
         // A cell of the raster no face centre fell in (an edge) counts as at the actor's nearest point.
         for (int i = 0; i < occluders.count; i++)
         {
             Shape s = occluders.shapes.get(i);
             cover(s, actorCells, ox, oy, scale, hides(least, s.margin), HIDE, s.margin, nearest);
         }
+        return cleared;
     }
 
     private final Cells actorCells = new Cells();
-    /** What cover does in each cell: keep the actor's nearest 1 / depth (near), or leave the cell out where the face hides it. */
-    private static final int NEAREST = 0, HIDE = 1;
+    /**
+     * What cover does in each cell: keep the actor's nearest 1 / depth (near), or leave the cell out where the face hides
+     * it; or, touching no cell, note per row the cells in which the face can hide the actor at all (needFirst, needLast).
+     */
+    private static final int NEAREST = 0, HIDE = 1, NEED = 2;
+    /**
+     * Relative rounding allowed for in the rows' bounds: well beyond what working out 1 / depth in a cell is off by in
+     * floats, and far less than ROUNDING, which at a depth of 1200 is more than a local unit, the ground's whole margin
+     * (with that the ground under an actor standing on it passed for hiding it in every row up to its knees).
+     */
+    private static final float BOUND_ROUNDING = 3e-5f;
+    /** Per raster row, no drawn part of the actor in it has a smaller 1 / depth than this (see farthestByRow). */
+    private float[] rowFar = new float[0];
+    /** Per raster row, the first and last cell in which a wall's, object's or the ground's face can hide the actor. */
+    private int[] needFirst = new int[0], needLast = needFirst;
+    /** Whether the faces hid any cell of the actor (unseen). */
+    private boolean cleared;
+    /** Whether rows no face can hide anything in are passed over (farthestByRow); off only in tests, to compare. */
+    boolean boundRows = true;
+
+    /**
+     * Per raster row a bound on how far the actor reaches there: the least 1 / depth its drawn faces have within the
+     * row (and half a cell above and below it), less a little for rounding, and no more than that of its nearest point,
+     * which a cell no face centre fell in counts as. A face's 1 / depth is linear on the canvas, so within a row it is
+     * least where one of its edges enters or leaves the row, or at a corner in it. A wall's, object's or the ground's
+     * face that does not come nearer than this anywhere in a row hides no cell of it.
+     */
+    private void farthestByRow(int h, float oy, float scale, float nearest)
+    {
+        if (rowFar.length < h) { rowFar = new float[h * 2]; }
+        // Without the bound (0: every face passes it) every cell is visited: the same cut, for the tests to compare.
+        if (!boundRows) { Arrays.fill(rowFar, 0, h, 0); return; }
+        Arrays.fill(rowFar, 0, h, nearest);
+        float[] poly = new float[12], view = new float[9];
+        int[] v = new int[3];
+        for (int f = 0; f < body.faces; f++)
+        {
+            int n = polygon(body, f, camera, poly, view, v);
+            for (int q = 0; q < n; q++)
+            {
+                int next = (q + 1) % n;
+                float ya = (poly[q * 3 + 1] - oy) * scale, yb = (poly[next * 3 + 1] - oy) * scale, wa = poly[q * 3 + 2], wb = poly[next * 3 + 2];
+                if (ya > yb) { float t = ya; ya = yb; yb = t; t = wa; wa = wb; wb = t; }
+                // The rows whose band, from half a cell above the row to half a cell below it, the edge passes through.
+                int from = (int) Math.max(0, Math.ceil(ya - 1.5f)), to = (int) Math.min(h - 1, Math.floor(yb + 0.5f));
+                boolean level = !(yb - ya > 1e-6f);
+                float slope = level ? 0 : (wb - wa) / (yb - ya), ends = Math.min(wa, wb);
+                for (int r = from; r <= to; r++)
+                {
+                    // Least where the edge enters the band (1 / depth growing downwards) or leaves it.
+                    float y = slope < 0 ? Math.min(yb, r + 1.5f) : Math.max(ya, r - 0.5f);
+                    float least = (level ? ends : Math.max(ends, wa + slope * (y - ya))) * (1 - BOUND_ROUNDING);
+                    if (least < rowFar[r]) { rowFar[r] = least; }
+                }
+            }
+        }
+    }
+
     /** The raster cells (first column, first row, last column, last row) the faces that can hide the actor reach. */
     private final int[] reach = new int[4];
     /** Relative rounding allowed for when a face is known not to reach a cell's depth (far beyond float's error). */
@@ -406,7 +503,7 @@ final class PlayerSilhouette
     private static final float NEAR = 2 * ModelShapes.NEAR;
 
     /**
-     * Does what mode says (NEAREST, HIDE with the shape's margin and the actor's fallback 1 / depth) in every actor cell
+     * Does what mode says (NEAREST, HIDE or NEED with the shape's margin and the actor's fallback 1 / depth) in every actor cell
      * (set in the raster now) whose centre one of the shape's faces covers, with 1 / depth there (flat faces); faces
      * staying beyond 1 / depth limit are passed over (passed).
      * A face reaching nearer the camera than NEAR is clipped there first, as the renderers clip it: projecting a corner
@@ -513,6 +610,21 @@ final class PlayerSilhouette
             }
             if (lo > hi) { continue; }
             from = (int) lo; to = (int) hi;
+            if (mode != NEAREST)
+            {
+                // 1 / depth is linear along the row: nowhere in it more than at one of its ends (and a little, for
+                // rounding). A face that does not pass the actor's farthest point of the row there hides no cell of it.
+                float rowY = (py - y0) * dy, most = Math.max(w0 + (from + 0.5f - x0) * dx + rowY, w0 + (to + 0.5f - x0) * dx + rowY);
+                most += Math.abs(most) * BOUND_ROUNDING;
+                float bound = rowFar[cy];
+                if (!(most * (1 - margin * bound) > bound)) { continue; }
+                if (mode == NEED)
+                {
+                    if (from < needFirst[cy]) { needFirst[cy] = from; }
+                    if (to > needLast[cy]) { needLast[cy] = to; }
+                    continue;
+                }
+            }
             for (int cx = from; cx <= to; cx++)
             {
                 int word = row + (cx >>> 6);
@@ -529,7 +641,7 @@ final class PlayerSilhouette
                 if (mode == NEAREST) { if (inverse > near[cell]) { near[cell] = inverse; } continue; }
                 float player = near[cell] > 0 ? near[cell] : fallback;
                 // At least the margin nearer: 1 / depth beyond 1 / (actor depth - margin).
-                if (player > 0 && inverse * (1 - margin * player) > player) { bits[word] &= ~bit; }
+                if (player > 0 && inverse * (1 - margin * player) > player) { bits[word] &= ~bit; cleared = true; }
             }
         }
     }

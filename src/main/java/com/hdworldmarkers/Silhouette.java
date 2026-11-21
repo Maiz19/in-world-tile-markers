@@ -17,6 +17,8 @@ final class Silhouette
     /** The most grid cells a trace takes; the grid has a cell per canvas pixel, fewer for a shape larger than that. */
     static final int MAX_CELLS = 1 << 20;
     private static final long MAX_RASTER_WORK = 8L * MAX_CELLS;
+    /** The most cells of a grid finer than a cell per canvas pixel (stretched mode): a shape larger than that is traced coarser. */
+    static final int MAX_FINE_CELLS = MAX_CELLS / 2;
 
     private Silhouette() { }
 
@@ -84,19 +86,34 @@ final class Silhouette
         return trace(x, y, a, b, c, faces, hidden, scratch, true, null, null);
     }
 
-    /** Leaves cells out of a filled raster before it is traced: cell (i, j) covers canvas ox + i / scale to ox + (i + 1) / scale. */
+    /**
+     * Leaves cells out of a filled raster before it is traced: cell (i, j) covers canvas ox + i / scale to
+     * ox + (i + 1) / scale. Returns whether it left any out.
+     */
     interface Mask
     {
-        void apply(long[] bits, int words, int w, int h, float ox, float oy, float scale);
+        boolean apply(long[] bits, int words, int w, int h, float ox, float oy, float scale);
     }
 
     /**
      * As trace; without exact, the cell staircase simplified (the player's cut, made every frame, where a cell of precision
      * does not show), and the mask (if any) applied to the raster first (only without exact, whose edges come from the
-     * faces). The loops as they were before the mask go into unmasked (when given), from the same raster.
+     * faces). The loops as they were before the mask go into unmasked (when given), from the same raster; they are the
+     * ones returned too when the mask left nothing out.
      */
     static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
         Mask mask, List<float[]> unmasked)
+    {
+        return trace(x, y, a, b, c, faces, hidden, scratch, exact, mask, unmasked, 1);
+    }
+
+    /**
+     * As trace, with this many cells per canvas pixel at most (1 or more): the screen's pixels per canvas pixel in
+     * stretched mode, where the scene is drawn that fine and a cell of a canvas pixel showed as a rim of bare ground
+     * around the player's legs (2026-11-20). Fewer when the raster or its work would pass their bounds.
+     */
+    static List<float[]> trace(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, Scratch scratch, boolean exact,
+        Mask mask, List<float[]> unmasked, float finest)
     {
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (int f = 0; f < faces; f++)
@@ -112,8 +129,16 @@ final class Silhouette
         }
         if (minX > maxX) { return Collections.emptyList(); }
         double width = (double) maxX - minX, height = (double) maxY - minY;
-        // A cell per pixel; coarser for very large shapes, to bound the work per frame.
-        float scale = 1;
+        // A cell per pixel (finer when asked, while that stays within bounds); coarser for very large shapes, to bound
+        // the work per frame.
+        float scale = Math.max(1, finest);
+        if (scale > 1)
+        {
+            // As fine as MAX_FINE_CELLS allows, in quarter steps: a shape that changes a little keeps its grid.
+            double cells = paddedCells(width, height, scale);
+            if (cells > MAX_FINE_CELLS) { scale = Math.max(1, (float) Math.floor(scale * Math.sqrt(MAX_FINE_CELLS / cells) * 4) / 4); }
+            while (scale > 1 && rasterWork(x, y, a, b, c, faces, hidden, scale) > MAX_RASTER_WORK) { scale = Math.max(1, scale / 2); }
+        }
         while (paddedCells(width, height, scale) > MAX_CELLS && scale > 0.25f) { scale /= 2; }
         // Oversized/elongated projections use the source's 2D outline instead. Check the
         // padded dimensions before narrowing to ints or allocating any raster memory.
@@ -124,17 +149,7 @@ final class Silhouette
         int w = (int) Math.ceil(maxX * scale) + 2 - x0, h = (int) Math.ceil(maxY * scale) + 2 - y0;
         float ox = x0 / scale, oy = y0 / scale;
         // Repeated overlapping faces must not multiply raster work without a limit.
-        double work = 0;
-        for (int f = 0; f < faces; f++)
-        {
-            if (hidden != null && hidden[f]) { continue; }
-            int i = a[f], j = b[f], k = c[f];
-            if (unprojected(x, i, j, k)) { continue; }
-            double fw = (double) Math.max(x[i], Math.max(x[j], x[k])) - Math.min(x[i], Math.min(x[j], x[k]));
-            double fh = (double) Math.max(y[i], Math.max(y[j], y[k])) - Math.min(y[i], Math.min(y[j], y[k]));
-            work += paddedCells(fw, fh, scale);
-            if (work > MAX_RASTER_WORK) { return Collections.emptyList(); }
-        }
+        if (rasterWork(x, y, a, b, c, faces, hidden, scale) > MAX_RASTER_WORK) { return Collections.emptyList(); }
         // The raster as bits, 64 cells a word: filling, and finding the edges, work a word at a time.
         int words = (w + 63) >>> 6, total = Math.multiplyExact(words, h);
         if (scratch.bits.length < total) { scratch.bits = new long[total]; }
@@ -172,8 +187,10 @@ final class Silhouette
         }
         if (mask != null && !exact)
         {
-            if (unmasked != null) { unmasked.addAll(staircase(grid, words, w, h, ox, oy, scale, scratch)); }
-            mask.apply(grid, words, w, h, ox, oy, scale);
+            List<float[]> before = unmasked == null ? null : staircase(grid, words, w, h, ox, oy, scale, scratch);
+            if (before != null) { unmasked.addAll(before); }
+            // Nothing left out: the same loops, not traced again.
+            if (!mask.apply(grid, words, w, h, ox, oy, scale) && before != null) { return before; }
         }
         if (!exact) { return staircase(grid, words, w, h, ox, oy, scale, scratch); }
         List<int[]> corners = boundaries(grid, words, w, h, scratch);
@@ -471,6 +488,22 @@ final class Silhouette
     private static boolean unprojected(float[] x, int i, int j, int k)
     {
         return Float.isNaN(x[i]) || Float.isNaN(x[j]) || Float.isNaN(x[k]);
+    }
+
+    /** The cells of every drawn face's box at this scale, added up; counted no further than just past MAX_RASTER_WORK. */
+    private static double rasterWork(float[] x, float[] y, int[] a, int[] b, int[] c, int faces, boolean[] hidden, float scale)
+    {
+        double work = 0;
+        for (int f = 0; f < faces && work <= MAX_RASTER_WORK; f++)
+        {
+            if (hidden != null && hidden[f]) { continue; }
+            int i = a[f], j = b[f], k = c[f];
+            if (unprojected(x, i, j, k)) { continue; }
+            double fw = (double) Math.max(x[i], Math.max(x[j], x[k])) - Math.min(x[i], Math.min(x[j], x[k]));
+            double fh = (double) Math.max(y[i], Math.max(y[j], y[k])) - Math.min(y[i], Math.min(y[j], y[k]));
+            work += paddedCells(fw, fh, scale);
+        }
+        return work;
     }
 
     private static double paddedCells(double width, double height, float scale)

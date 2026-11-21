@@ -32,7 +32,10 @@ import net.runelite.api.coords.LocalPoint;
  * whose radius stays inside that tile. The client gives every tile only a few
  * object slots and an object takes one on each tile its radius touches; one
  * object per shape (up to 3x3 tiles each) overflowed them, and the client then
- * dropped a different set of objects every frame.
+ * dropped a different set of objects every frame. Only ever the marks: the client
+ * puts these objects in the scene after the players, NPCs, projectiles and effects
+ * of a frame, so none of those loses its slot to a mark; since RuneLite 1.13.6 it
+ * keeps no such limit for them at all.
  */
 @Singleton
 @RequiredArgsConstructor(onConstructor_ = @Inject)
@@ -82,6 +85,9 @@ final class SceneShapeRenderer
      * are done their projections are left alone and their targets drawn as last time (see models). Client thread only.
      */
     private final List<Job> pending = new ArrayList<>();
+    /** The longest the client thread waits in a frame for chains the workers still compute, in nanoseconds (see awaitWorkers). */
+    static final long LATE_WAIT = 1_000_000;
+    long lateWait = LATE_WAIT;
     private final Set<Projection> busy = Collections.newSetFromMap(new IdentityHashMap<>());
     /** The jobs drawn per target key this frame and the last: one of a busy projection is drawn again. */
     private Map<String, Job> drawnJobs = new HashMap<>(), lastDrawnJobs = new HashMap<>();
@@ -223,6 +229,8 @@ final class SceneShapeRenderer
         /** What compute made: the region its outline paints, its clickbox. */
         OutlinePaint.Mesh paint;
         List<float[]> polygons;
+        /** The projected points' bounds (centre and size) they were made for: drawn in a later frame, they move along (see movedTo). */
+        float centerX, centerY, boundsWidth, boundsHeight;
         /** The next job of the same projection and kind, computed after this one on the same thread (see models). */
         Job next;
         /** The first job of its chain (null: computed by none); in that, whether the chain is done (see computeAll). */
@@ -411,6 +419,8 @@ final class SceneShapeRenderer
     private final Map<String, Integer> snapSlots = new HashMap<>();
     private final float[] holdX = new float[SNAP_SLOTS + 1], holdY = new float[SNAP_SLOTS + 1];
     private final boolean[] held = new boolean[SNAP_SLOTS + 1];
+    /** Per hold, the frame its board was last drawn in (see snapSlot). */
+    private final int[] snapFrame = new int[SNAP_SLOTS + 1];
     /** Per hold, whether its board hangs on the game's own overhead pixel instead (Board.overhead). */
     private final boolean[] gameSlot = new boolean[SNAP_SLOTS + 1];
     private final Object snapLock = new Object();
@@ -771,13 +781,33 @@ final class SceneShapeRenderer
             Integer slot = snapSlots.get(key);
             if (slot == null)
             {
+                // All taken: boards not drawn since the frame before give theirs up. Kept for good, the boards after
+                // the first SNAP_SLOTS of a session (a bar per NPC fought) got no hold and left the pixel grid.
+                if (snapSlots.size() >= SNAP_SLOTS) { snapSlots.values().removeIf(s -> frame - snapFrame[s] > 1); }
                 if (snapSlots.size() >= SNAP_SLOTS) { return 0; }
-                slot = snapSlots.size() + 1;
+                slot = freeSlot();
+                held[slot] = false;
+                gameSlot[slot] = false;
                 snapSlots.put(key, slot);
             }
+            snapFrame[slot] = frame;
             return slot;
         }
     }
+
+    /** The lowest hold no board has; one is free. */
+    private int freeSlot()
+    {
+        boolean[] taken = new boolean[SNAP_SLOTS + 1];
+        for (int s : snapSlots.values()) { taken[s] = true; }
+        int slot = 1;
+        while (taken[slot]) { slot++; }
+        return slot;
+    }
+
+    /** The holds taken now, and whether a board has one, for tests. */
+    int snapSlotsTaken() { synchronized (snapLock) { return snapSlots.size(); } }
+    boolean holds(String key) { synchronized (snapLock) { return snapSlots.containsKey(key); } }
 
     /**
      * Puts a board's point (q: its canvas x and y) on the whole screen pixel it is held on (see snapSlot). A board on
@@ -873,14 +903,23 @@ final class SceneShapeRenderer
      * Draws the targets as model does, in their order, but first computes all their traces, outline regions and
      * clickboxes (most of a frame with NPCs marked) on the workers and the client thread at once. The client is only
      * read on the client thread (prepare, finish); one projection's outlines, and its clickboxes, are computed one after
-     * another on one thread, in their order, as model computes them. The client thread never waits for a worker: a
-     * target whose chain a worker still computes at the end of the frame is drawn as it was last frame (see computeAll),
-     * and its projection left to that worker until it is done.
+     * another on one thread, in their order, as model computes them. The client thread waits for a worker a millisecond
+     * at most (see awaitWorkers): a target whose chain a worker still computes after that is drawn as it was last frame,
+     * moved to where it is now (see computeAll, movedTo), and its projection left to that worker until it is done.
      */
     void models(List<ModelTarget> targets)
     {
         // Chains the workers finished since are the client thread's again (done is set after the chain's last write).
-        pending.removeIf(c -> c.done);
+        // What they made is their targets' last drawn from here on. It was thrown away: a target whose worker was late
+        // every frame stayed drawn as the last frame it was on time for, left behind on the screen as the model and the
+        // camera moved, and one never on time was not in the scene at all (RuneLite's 2D outline instead).
+        for (Iterator<Job> chain = pending.iterator(); chain.hasNext(); )
+        {
+            Job c = chain.next();
+            if (!c.done) { continue; }
+            chain.remove();
+            for (Job j = c; j != null; j = j.next) { drawnJobs.put(j.t.key, j); }
+        }
         busy.clear();
         for (Job c : pending) { busy.add(c.p); }
         Map<String, Job> swap = lastDrawnJobs;
@@ -900,7 +939,8 @@ final class SceneShapeRenderer
                 // Kept with the models drawn this frame; drawn as last time.
                 mine.frame = frame;
                 Job before = lastDrawnJobs.get(t.key);
-                if (before != null) { jobs.add(before); }
+                // Nothing made for it yet: no shape this frame, rather than RuneLite's 2D one until the worker is done.
+                if (before != null) { jobs.add(before); } else { culled(t.key); }
                 continue;
             }
             Job j = prepare(t, threads);
@@ -920,18 +960,49 @@ final class SceneShapeRenderer
         if (failed != null) { Throwables.throwIfUnchecked(failed); throw new IllegalStateException(failed); }
         for (Job j : jobs)
         {
-            Job drawn = j.head == null || j.head.done ? j : lastDrawnJobs.get(j.t.key);
-            if (drawn == null) { continue; }
+            boolean late = j.head != null && !j.head.done;
+            Job drawn = late ? lastDrawnJobs.get(j.t.key) : j;
+            // Late and nothing made for it before: no shape this frame (see above).
+            if (drawn == null) { culled(j.t.key); continue; }
+            // What was last made for it, where its model is now: its projection is of this frame.
+            if (late) { drawn = movedTo(drawn, j); }
             finish(drawn);
             drawnJobs.put(drawn.t.key, drawn);
         }
     }
 
     /**
+     * A job made for an earlier frame as it is drawn in the frame of now, a job of the same target whose chain a worker
+     * still computes: its outline region and clickbox moved from the bounds the model had then to those it has now, as
+     * an outline over the budget is moved (see prepare). At its old place on the canvas it trailed behind a model that
+     * walks or a camera that turns.
+     */
+    private static Job movedTo(Job old, Job now)
+    {
+        Projection p = now.p;
+        if (old.centerX == p.centerX && old.centerY == p.centerY && old.boundsWidth == p.width && old.boundsHeight == p.height2d) { return old; }
+        Job m = new Job(now.t, p, now.location, now.level, now.boat, now.boatAnchor, now.boatLevel);
+        m.width = now.width;
+        m.asHull = old.asHull;
+        if (old.paint != null)
+        {
+            float[] xy = moved(Collections.singletonList(old.paint.xy), old.centerX, old.centerY, old.boundsWidth, old.boundsHeight,
+                p.centerX, p.centerY, p.width, p.height2d).get(0);
+            m.paint = new OutlinePaint.Mesh(xy, old.paint.tris);
+        }
+        if (old.polygons != null)
+        {
+            m.polygons = moved(old.polygons, old.centerX, old.centerY, old.boundsWidth, old.boundsHeight, p.centerX, p.centerY, p.width, p.height2d);
+        }
+        m.centerX = p.centerX; m.centerY = p.centerY; m.boundsWidth = p.width; m.boundsHeight = p.height2d;
+        return m;
+    }
+
+    /**
      * Computes the chains (a job and its next ones), taken one at a time by the workers and this thread, which first
-     * computes its own, until none is left. It does not wait for the chains a worker took: those not done yet are left
-     * pending (see models), the first failure kept for the client thread. A worker that never started (busy, or stopped
-     * with the plugin) finds no chain left, so it cannot hold up the frame.
+     * computes its own, until none is left. For the chains a worker took it waits a moment only (see awaitWorkers):
+     * those not done then are left pending (see models), the first failure kept for the client thread. A worker that
+     * never started (busy, or stopped with the plugin) finds no chain left, so it cannot hold up the frame.
      */
     private void computeAll(List<Job> chains, List<Job> own, ExecutorService pool, int threads)
     {
@@ -972,7 +1043,30 @@ final class SceneShapeRenderer
                 finally { c.done = true; }
             }
             take.accept(silhouetteScratch);
+            awaitWorkers(chains);
             for (Job c : chains) { if (!c.done) { pending.add(c); } }
+        }
+    }
+
+    /**
+     * Gives the workers lateWait to finish the chains they took. When this thread runs out of chains a worker is
+     * nearly always part way through its last one, a fraction of a millisecond from done: not waited for at all, some
+     * outline of every frame was drawn as the frame before made it, a frame behind a character that walks (seen at a
+     * low frame rate). A worker that takes longer (its thread not running) is left behind as before.
+     */
+    private void awaitWorkers(List<Job> chains)
+    {
+        long start = 0;
+        boolean waiting = false;
+        for (Job c : chains)
+        {
+            while (!c.done)
+            {
+                long now = System.nanoTime();
+                if (!waiting) { waiting = true; start = now; }
+                if (now - start >= lateWait) { return; }
+                Thread.onSpinWait();
+            }
         }
     }
 
@@ -1001,6 +1095,7 @@ final class SceneShapeRenderer
         if (Float.isNaN(projected.depth) || projected.outside && !t.clickbox) { culled(t.key); return null; }
         Job j = new Job(t, projected, location, Terrain.level(wv, location.getSceneX(), location.getSceneY(), t.plane()), boat, boatAnchor, boatLevel);
         j.width = width(t.borderWidth);
+        j.centerX = projected.centerX; j.centerY = projected.centerY; j.boundsWidth = projected.width; j.boundsHeight = projected.height2d;
         // Traced once a frame at most (see compute, which sets the loops later).
         if (t.outline && projected.tracedFrame != frame && (projected.loops == null || projected.loopsStale && projected.staleFrame != frame))
         {
@@ -1994,6 +2089,8 @@ final class SceneShapeRenderer
             boolean drawn = poses != null && poses.ask(a, model);
             if (s.take(model, at.getX(), at.getY(), height, a.getCurrentOrientation(), occluders))
             {
+                // Traced as fine as the scene is drawn (stretched mode).
+                s.sharpness(1 / Math.min(pixel, pixelY));
                 if (drawn) { s.drawnAs(poses.x, poses.y, poses.z); }
                 taken.add(s);
             }

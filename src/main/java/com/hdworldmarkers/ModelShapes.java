@@ -179,8 +179,9 @@ final class ModelShapes
         for (int i = 0; i < n; i++)
         {
             if (Float.isNaN(xs[i])) { continue; }
-            qx[i] = Math.max(0, Math.min((1 << 21) - 1, Math.round(xs[i] * 16) + (1 << 20)));
-            qy[i] = Math.max(0, Math.min((1 << 21) - 1, Math.round(ys[i] * 16) + (1 << 20)));
+            // As long: a point millions of pixels off the canvas overflowed the int and came out on the other side.
+            qx[i] = (int) Math.max(0, Math.min((1 << 21) - 1, (long) Math.round(xs[i] * 16) + (1 << 20)));
+            qy[i] = (int) Math.max(0, Math.min((1 << 21) - 1, (long) Math.round(ys[i] * 16) + (1 << 20)));
             keys[m++] = (long) qx[i] << 42 | (long) qy[i] << 21 | i;
         }
         Arrays.sort(keys, 0, m);

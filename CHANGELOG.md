@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.1
+
+- Fixes: zoomed in, the tile line is no longer cut away in a wide box around your feet (shadows baked into the model are left out of the cut, as 117 HD hides them).
+- Outlines of walking characters stay with them: the client thread waits at most 1 ms for the outline threads, and a chain still busy is drawn as last frame, moved along.
+- Outlines no longer turn thick or fly away.
+- **Hide in combat** of the Interact highlight: a stun, poison or a trap alone is no combat, and a highlight no longer disappears while you still interact with the NPC after a click on an item.
+- Faster: clickboxes share the outline budget, whole walls and objects behind your character are skipped in the cut, marked tiles in reach are kept while nothing changed, and the extended scene is only made when a walk beyond the loaded area needs it.
+
 ## 1.6.0
 
 - Other plugins can send **boards**: coloured rectangles and texts above a character or a point, such as a health bar with its numbers, drawn in the world on whole screen pixels and gliding between the character's steps (see the guide). A board's text can have a size and font of its own, and its opaque rectangles stay opaque under 117 HD and keep their colours there between sun and shade (exactly the colours sent with a 117 HD that draws them unlit).

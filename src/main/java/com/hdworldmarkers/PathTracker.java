@@ -108,17 +108,19 @@ final class PathTracker extends Overlay implements KeyListener
         boolean routed;
         Click(MenuEntry e) { type = e.getType(); x = e.getParam0(); y = e.getParam1(); id = e.getIdentifier(); actor = e.getActor(); option = e.getOption(); }
     }
-    private Point mouseAt;
+    /** Written by the mouse and key listeners on the AWT thread, as ctrl, keyActive, keyHover and pressed below. */
+    private volatile Point mouseAt;
     /**
      * A route found at a click may start a tick late (fresh until found again once); mismatch: last tick you were not
      * where the active path put you. pressed: a left press, which may be a minimap click (it has no menu option).
      */
-    private boolean fresh, mismatch, clickInMenu, clickRunning, ctrl, keyActive, keyHover, pressed;
+    private boolean fresh, mismatch, clickInMenu, clickRunning;
+    private volatile boolean ctrl, keyActive, keyHover, pressed;
     private final MouseAdapter mouseListener = new MouseAdapter()
     {
         @Override public MouseEvent mousePressed(MouseEvent e)
         {
-            if (e.getButton() == MouseEvent.BUTTON1) { pressed = true; mouseAt = client.getMouseCanvasPosition(); }
+            if (e.getButton() == MouseEvent.BUTTON1) { mouseAt = client.getMouseCanvasPosition(); pressed = true; }
             return e;
         }
     };
@@ -146,11 +148,23 @@ final class PathTracker extends Overlay implements KeyListener
         }
     }
 
-    void startUp()
+    /**
+     * Nothing of an earlier walk is left, with the plugin turned on, after a hop or logging in: the last click's range
+     * walk (approaching) showed its old end tile as the destination until the next game tick.
+     */
+    private void forget()
     {
         activePath.clear(); hoverPath.clear(); predictedPath.clear();
+        click = null; clickTile = null; lastHovered = null; lastTile = null;
+        approaching = toDestination = clickRouted = fresh = mismatch = false;
+        approachEnd = null; clickDestination = null; clickFlag = null;
+        watching = 0;
+    }
+
+    void startUp()
+    {
+        forget();
         routes.rescan();
-        click = null;
         ctrl = keyActive = keyHover = pressed = false;
         overlays.add(this);
         keys.registerKeyListener(this);
@@ -232,7 +246,7 @@ final class PathTracker extends Overlay implements KeyListener
 
     @Subscribe public void onGameStateChanged(GameStateChanged e)
     {
-        if (e.getGameState() == GameState.HOPPING || e.getGameState() == GameState.LOGGING_IN) { activePath.clear(); }
+        if (e.getGameState() == GameState.HOPPING || e.getGameState() == GameState.LOGGING_IN) { forget(); }
         if (e.getGameState() == GameState.LOADING) { routes.sceneLoading(); }
     }
 

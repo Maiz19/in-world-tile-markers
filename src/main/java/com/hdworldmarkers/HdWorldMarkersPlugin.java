@@ -128,6 +128,7 @@ public class HdWorldMarkersPlugin extends Plugin
         // Config changes while stopped were not delivered to this instance.
         forgetSavedMarks();
         hdSettings = null;
+        textStyle = null;
         // The shadow transparency notice shows again after turning the plugin on (or installing it).
         warnedShadowTransparency = false;
         overlays.add(overlay);
@@ -447,6 +448,9 @@ public class HdWorldMarkersPlugin extends Plugin
             {
                 forgetSavedMarks();
                 hdSettings = null;
+                // The other profile's Text settings and outline threads: a switch sends no change per setting.
+                textStyle = null;
+                renderer.startWorkers(config.outlineThreads());
                 reset(); dirty = true; failedUntil = 0;
             }
         });
@@ -549,6 +553,8 @@ public class HdWorldMarkersPlugin extends Plugin
 
     @Subscribe public void onGameTick(GameTick e) { if (ticksSinceLogin < Integer.MAX_VALUE) { ticksSinceLogin++; } }
     @Subscribe public void onHitsplatApplied(HitsplatApplied e) { sources.hitsplat(e.getActor(), System.currentTimeMillis()); }
+
+    @Subscribe public void onActorDeath(ActorDeath e) { sources.died(e.getActor()); }
     @Subscribe public void onNpcSpawned(NpcSpawned e) { sources.add(e.getNpc()); }
     @Subscribe public void onNpcChanged(NpcChanged e) { sources.add(e.getNpc()); }
     @Subscribe public void onNpcDespawned(NpcDespawned e) { sources.remove(e.getNpc()); }

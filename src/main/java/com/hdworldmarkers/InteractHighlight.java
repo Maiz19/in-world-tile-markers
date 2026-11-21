@@ -42,8 +42,10 @@ import javax.inject.Singleton;
 import lombok.RequiredArgsConstructor;
 import net.runelite.api.*;
 import net.runelite.api.events.*;
+import net.runelite.api.gameval.SpotanimID;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.util.ColorUtil;
+import net.runelite.client.util.Text;
 import static net.runelite.api.MenuAction.*;
 
 /** The NPC, object or ground item the mouse is on, and the one you clicked or interact with, in the styles picked for each. */
@@ -58,8 +60,12 @@ final class InteractHighlight
     private MouseTargets.Item item;
     private Actor actor;
     private int clickTick, clickCycle;
+    /** The NPC you last clicked Pickpocket on, until another kind of click: its highlight ends with each attempt. */
+    private NPC picked;
+    /** Your Thieving xp at that click: more means the pickpocket succeeded. */
+    private int pickXp;
 
-    void clear() { object = null; item = null; actor = null; }
+    void clear() { object = null; item = null; actor = null; picked = null; }
 
     @Subscribe public void onGameStateChanged(GameStateChanged e)
     {
@@ -78,7 +84,43 @@ final class InteractHighlight
         if (me != null && a == me.getInteracting()) { actor = a; }
     }
 
-    @Subscribe public void onNpcDespawned(NpcDespawned e) { if (e.getNpc() == actor) { actor = null; } }
+    @Subscribe public void onNpcDespawned(NpcDespawned e)
+    {
+        if (e.getNpc() == actor) { actor = null; }
+        if (e.getNpc() == picked) { picked = null; }
+    }
+
+    /** Thieving xp: the pickpocket succeeded. */
+    @Subscribe public void onStatChanged(StatChanged e)
+    {
+        if (e.getSkill() != Skill.THIEVING) { return; }
+        // Not a change of the boosted level alone.
+        if (e.getXp() > pickXp) { pickpocketOver(); }
+        pickXp = e.getXp();
+    }
+
+    /** At 200M xp no xp is gained: the xp drop still tells. */
+    @Subscribe public void onFakeXpDrop(FakeXpDrop e) { if (e.getSkill() == Skill.THIEVING) { pickpocketOver(); } }
+
+    /** The stun of a failed pickpocket. */
+    @Subscribe public void onGraphicChanged(GraphicChanged e) { if (e.getActor() == client.getLocalPlayer() && stunned()) { pickpocketOver(); } }
+
+    /** Its damage, for a stun shown another way. */
+    @Subscribe public void onHitsplatApplied(HitsplatApplied e) { if (picked != null && e.getActor() == client.getLocalPlayer()) { pickpocketOver(); } }
+
+    /**
+     * A pickpocket attempt is over, picked or caught: its NPC is no longer highlighted, until the next click. Without
+     * this a quickly repeated click kept it highlighted for good: the game's own end of the interaction is not followed
+     * in the tick of a click.
+     */
+    private void pickpocketOver() { if (actor != null && actor == picked) { actor = null; } }
+
+    /** Stunned by a failed pickpocket: the game starts no new one, a click on the NPC highlights nothing. */
+    private boolean stunned()
+    {
+        Player me = client.getLocalPlayer();
+        return me != null && me.hasSpotAnim(SpotanimID.STUNNED_THIEVING);
+    }
 
     /** Arrived where the click walked: the object is no longer what you go to. */
     @Subscribe public void onGameTick(GameTick e)
@@ -92,6 +134,8 @@ final class InteractHighlight
         object = null; item = null;
         // Players are never highlighted (as in RuneLite's Interact Highlight): the Plugin Hub allows no player highlighting.
         actor = e.getTarget() instanceof NPC ? e.getTarget() : null;
+        // Stunned, the game still turns you to the NPC you click for a tick: no pickpocket, no highlight.
+        if (actor != null && actor == picked && stunned()) { actor = null; }
     }
 
     @Subscribe public void onMenuOptionClicked(MenuOptionClicked e)
@@ -105,27 +149,46 @@ final class InteractHighlight
                 break;
             case WIDGET_TARGET_ON_NPC: case NPC_FIRST_OPTION: case NPC_SECOND_OPTION: case NPC_THIRD_OPTION: case NPC_FOURTH_OPTION:
             case NPC_FIFTH_OPTION:
+                boolean pickpocket = "Pickpocket".equalsIgnoreCase(entry.getOption() == null ? null : Text.removeTags(entry.getOption()));
+                if (pickpocket && stunned()) { picked = entry.getNpc(); break; }
                 clicked(null, entry.getNpc());
+                if (pickpocket) { picked = entry.getNpc(); pickXp = client.getSkillExperience(Skill.THIEVING); }
                 break;
             case WIDGET_TARGET_ON_GROUND_ITEM: case GROUND_ITEM_FIRST_OPTION: case GROUND_ITEM_SECOND_OPTION: case GROUND_ITEM_THIRD_OPTION:
             case GROUND_ITEM_FOURTH_OPTION: case GROUND_ITEM_FIFTH_OPTION:
                 clicked(null, null);
                 item = mouse.item(entry);
                 break;
+            case WIDGET_TARGET_ON_WIDGET:
+                itemClicked();
+                break;
             // Clicks that end an interaction, and ones on a player (never highlighted).
-            case WIDGET_TARGET_ON_WIDGET: case WALK: case WIDGET_TARGET_ON_PLAYER: case PLAYER_FIRST_OPTION: case PLAYER_SECOND_OPTION:
+            case WALK: case WIDGET_TARGET_ON_PLAYER: case PLAYER_FIRST_OPTION: case PLAYER_SECOND_OPTION:
             case PLAYER_THIRD_OPTION: case PLAYER_FOURTH_OPTION: case PLAYER_FIFTH_OPTION: case PLAYER_SIXTH_OPTION: case PLAYER_SEVENTH_OPTION:
             case PLAYER_EIGHTH_OPTION:
                 clear();
                 break;
             default:
-                if (e.isItemOp()) { clear(); }
+                if (e.isItemOp()) { itemClicked(); }
         }
+    }
+
+    /**
+     * A click on an item (eat, drink, wield, use on another): what you walked to is off, but the NPC the game still has
+     * you interacting with stays, as RuneLite's falls back on it. Eating or switching weapons does not end a fight; where
+     * it does end an interaction, the game says so (onInteractingChanged).
+     */
+    private void itemClicked()
+    {
+        Player me = client.getLocalPlayer();
+        Actor with = me == null ? null : me.getInteracting();
+        object = null; item = null;
+        actor = with instanceof NPC ? with : null;
     }
 
     private void clicked(TileObject o, Actor a)
     {
-        object = o; item = null; actor = a;
+        object = o; item = null; actor = a; picked = null;
         clickTick = client.getTickCount();
         clickCycle = client.getGameCycle();
     }
